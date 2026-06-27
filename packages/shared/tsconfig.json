@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    // "paths": {
+    //   "@agent_design/shared": ["../shared/src/index.ts"],
+    //   "@agent_design/shared/constants": ["../shared/src/constants/index.ts"],
+    //   "@agent_design/shared/types": ["../shared/src/types/index.ts"]
+    // }
+  },
+  "include": [
+    "src/index.ts",
+    "src/constants/index.ts",
+    "src/types/index.ts",
+    "src/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "tests"]
+}

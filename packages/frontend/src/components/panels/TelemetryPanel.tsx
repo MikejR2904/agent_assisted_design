@@ -1,0 +1,154 @@
+'use client';
+
+import { Activity, Cpu, Zap, Download, AlertCircle } from 'lucide-react';
+import { useTelemetryStore } from '../../lib/stores/telemetryStore';
+import { useAgentStore } from '../../lib/stores/agentStore';
+import { clsx } from 'clsx';
+
+const statusColors = {
+  ok: 'text-success',
+  running: 'text-warning animate-pulse',
+  error: 'text-error',
+  idle: 'text-gray-500',
+};
+
+const statusDots = {
+  ok: 'bg-success',
+  running: 'bg-warning animate-pulse',
+  error: 'bg-error',
+  idle: 'bg-gray-600',
+};
+
+export function TelemetryPanel() {
+  const { metrics, edaStatus, tokensByAgent, currentGate, condition, sessionId } = useTelemetryStore();
+  const { agents } = useAgentStore();
+
+  const activeAgents = agents.filter((a) => a.status === 'thinking' || a.status === 'awaiting-approval');
+
+  const downloadTelemetry = () => {
+    if (!sessionId || !condition) return;
+    window.open(`/api/telemetry/logs/${condition}_${sessionId}.jsonl`, '_blank');
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-surface-raised border-l border-surface-overlay overflow-y-auto">
+      <div className="px-4 py-3 border-b border-surface-overlay flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-mono text-gray-300">
+          <Activity size={14} className="text-accent" />
+          Telemetry
+        </div>
+        {sessionId && (
+          <button
+            onClick={downloadTelemetry}
+            title="Download session JSONL"
+            className="text-gray-500 hover:text-accent transition-colors"
+          >
+            <Download size={14} />
+          </button>
+        )}
+      </div>
+
+      {/* Token Tracker */}
+      <Section title="Token Tracker" icon={<Zap size={12} />}>
+        <div className="space-y-2">
+          <TokenRow label="Input" value={metrics?.totalInputTokens ?? 0} color="text-blue-400" />
+          <TokenRow label="Output" value={metrics?.totalOutputTokens ?? 0} color="text-purple-400" />
+          <TokenRow label="Total" value={metrics?.totalTokens ?? 0} color="text-accent" bold />
+        </div>
+        {Object.entries(tokensByAgent).length > 0 && (
+          <div className="mt-3 space-y-1">
+            <p className="text-xs text-gray-500 mb-1">Per Agent</p>
+            {Object.entries(tokensByAgent).map(([agentId, tokens]) => {
+              const agent = agents.find((a) => a.id === agentId);
+              return (
+                <div key={agentId} className="flex justify-between text-xs">
+                  <span className="text-gray-400 truncate">{agent?.name ?? agentId.slice(0, 8)}</span>
+                  <span className="text-gray-300 font-mono">{(tokens.input + tokens.output).toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Section>
+
+      {/* Attempt Counter */}
+      <Section title="Session Stats" icon={<Cpu size={12} />}>
+        <div className="space-y-2">
+          <StatRow label="Tool Executions" value={metrics?.toolExecutions ?? 0} />
+          <StatRow label="Tool Failures" value={metrics?.toolFailures ?? 0} color="text-error" />
+          <StatRow label="Human Approvals" value={metrics?.humanApprovals ?? 0} color="text-success" />
+          <StatRow label="Human Denials" value={metrics?.humanDenials ?? 0} color="text-error" />
+          <StatRow label="Human Edits" value={metrics?.humanModifications ?? 0} color="text-warning" />
+          <StatRow label="Active Gate" value={currentGate} color="text-accent" />
+          <StatRow label="Condition" value={condition ?? '—'} />
+        </div>
+      </Section>
+
+      {/* EDA Tool Status */}
+      <Section title="EDA Tool Status" icon={<Activity size={12} />}>
+        <div className="space-y-2">
+          {(['verilator', 'openroad', 'opensta'] as const).map((tool) => (
+            <div key={tool} className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={clsx('w-2 h-2 rounded-full', statusDots[edaStatus[tool]])} />
+                <span className="text-xs text-gray-400 font-mono">{tool}</span>
+              </div>
+              <span className={clsx('text-xs font-mono', statusColors[edaStatus[tool]])}>
+                {edaStatus[tool]}
+              </span>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* Active Agents */}
+      {activeAgents.length > 0 && (
+        <Section title="Active Agents" icon={<AlertCircle size={12} className="text-warning" />}>
+          <div className="space-y-2">
+            {activeAgents.map((agent) => (
+              <div key={agent.id} className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+                <div>
+                  <p className="text-xs text-gray-300">{agent.name}</p>
+                  <p className="text-xs text-gray-500">{agent.status}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="px-4 py-3 border-b border-surface-overlay">
+      <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-3 font-mono uppercase tracking-wider">
+        {icon}
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function TokenRow({ label, value, color, bold }: { label: string; value: number; color: string; bold?: boolean }) {
+  return (
+    <div className="flex justify-between items-center">
+      <span className="text-xs text-gray-400">{label}</span>
+      <span className={clsx('text-xs font-mono', color, bold && 'font-bold')}>
+        {value.toLocaleString()}
+      </span>
+    </div>
+  );
+}
+
+function StatRow({ label, value, color }: { label: string; value: string | number; color?: string }) {
+  return (
+    <div className="flex justify-between items-center">
+      <span className="text-xs text-gray-400">{label}</span>
+      <span className={clsx('text-xs font-mono', color ?? 'text-gray-300')}>{value}</span>
+    </div>
+  );
+}

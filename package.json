@@ -1,0 +1,36 @@
+{
+  "name": "agent-assisted-design",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Human-Agent Collaboration Workbench for RTL-to-GDSII Design",
+  "scripts": {
+    "dev": "pnpm --parallel --filter backend --filter frontend dev",
+    "build": "pnpm --filter shared build && pnpm --filter backend build && pnpm --filter frontend build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "test:unit": "pnpm -r --filter '!frontend' test:unit",
+    "test:e2e": "pnpm --filter frontend test:e2e",
+    "clean": "pnpm -r exec -- rm -rf dist .next node_modules"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "tsc-alias": "^1.8.17",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}

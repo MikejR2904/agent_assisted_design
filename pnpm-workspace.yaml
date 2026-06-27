@@ -1,0 +1,10 @@
+packages:
+  - 'packages/*'
+  - 'external/kiota-typescript/packages/**'
+allowBuilds:
+  kiota-typescript: true
+  better-sqlite3: false
+  esbuild: false
+  sharp: false
+  unrs-resolver: false
+  node-pty: false

@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ─────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+}
+
+html, body, #__next {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Scrollbars ───────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2d3748;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4a5568;
+}
+
+/* ── Prose overrides for dark theme ──────────────────── */
+.prose-invert pre {
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.prose-invert p:last-child {
+  margin-bottom: 0;
+}
+
+.prose-invert h1,
+.prose-invert h2,
+.prose-invert h3 {
+  color: #e2e8f0;
+}
+
+.prose-invert table {
+  font-size: 0.75rem;
+}
+
+.prose-invert th {
+  color: #94a3b8;
+}
+
+/* ── Monaco editor dark integration ──────────────────── */
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .margin {
+  background-color: #0f1117 !important;
+}
+
+/* ── Animations ───────────────────────────────────────── */
+@keyframes stream-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.stream-cursor {
+  animation: stream-cursor 0.8s ease-in-out infinite;
+}

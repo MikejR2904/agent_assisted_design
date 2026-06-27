@@ -1,0 +1,16 @@
+# We'll create .env.example/ and config/ examples once this project is concluded
+.env
+config/
+
+# Build artefacts and lock files
+node_modules/
+dist/
+.next/
+external/
+package-lock.json
+yarn.lock
+
+# Hide run results
+telemetry/
+workspaces/
+
