@@ -3,19 +3,25 @@ import { persist } from 'zustand/middleware';
 import type { AgentConfig, AgentStatus } from '@agent_design/shared/types';
 import { agentsApi } from '../api/client';
 
-// Simple obfuscation for API keys stored in localStorage - TO DO
-// NOT cryptographic, just prevents casual clipboard snooping.
-function decodeKey(encoded: string): string {
-  try {
-    return atob(encoded);
-  } catch {
-    return encoded; // already plain (legacy)
-  }
-}
+// // Simple obfuscation for API keys stored in localStorage - TO DO
+// // NOT cryptographic, just prevents casual clipboard snooping.
+// function decodeKey(encoded: string): string {
+//   try {
+//     return atob(encoded);
+//   } catch {
+//     return encoded; // already plain (legacy)
+//   }
+// }
 
 /** Returns the decoded (plain) API key for a given agent. */
 export function getDecodedApiKey(agent: AgentConfig): string {
-  return agent.apiKey ? decodeKey(agent.apiKey) : '';
+  if (!agent.apiKey) return '';
+  try {
+    return atob(agent.apiKey);
+  } catch {
+    // If decoding fails, return as-is (for legacy plaintext keys)
+    return agent.apiKey;
+  }
 }
 
 interface AgentStore {

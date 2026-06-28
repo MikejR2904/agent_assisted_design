@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback } from 'react';
-import { Paperclip, X, FileText, AlertTriangle, Upload } from 'lucide-react';
+import { Paperclip, X, FileText, AlertTriangle, } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import type { Attachment } from '@agent_design/shared/types';
 import { clsx } from 'clsx';
@@ -32,44 +32,45 @@ export interface LocalAttachment extends Attachment {
   scope?: 'message';
 }
 
-interface AttachmentBarProps {
-  attachments: LocalAttachment[];
+// Attachment Trigger Button Component
+interface AttachmentButtonProps {
   onAdd: (attachment: LocalAttachment) => void;
-  onRemove: (id: string) => void;
+  disabled?: boolean;
 }
 
-export function AttachmentBar({ attachments, onAdd, onRemove }: AttachmentBarProps) {
+export function AttachmentButton({ onAdd, disabled }: AttachmentButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const processFile = useCallback(async (file: File) => {
     setError(null);
 
-    // Size check
     if (file.size > MAX_SIZE_BYTES) {
-      setError(`${file.name} is too large (max 200 KB)`);
+      setError(`${file.name} is too large (max 10 MB)`);
       return;
     }
 
-    // Type check
     const ext = '.' + (file.name.split('.').pop()?.toLowerCase() ?? '');
     if (!ACCEPTED_TYPES.includes(ext)) {
-      setError(`${file.name}: unsupported type. Accepted: ${ACCEPTED_TYPES.join(', ')}`);
+      setError(`${file.name}: unsupported type.`);
       return;
     }
 
-    const content = await file.text();
-    const attachment: LocalAttachment  = {
-      id: uuidv4(),
-      name: file.name,
-      contentType: file.type || 'text/plain',
-      size: file.size,
-      content,
-      uploadedAt: new Date().toISOString(),
-      scope: 'message',
-    };
-    onAdd(attachment);
+    try {
+      const content = await file.text();
+      const attachment: LocalAttachment = {
+        id: uuidv4(),
+        name: file.name,
+        contentType: file.type || 'text/plain',
+        size: file.size,
+        content,
+        uploadedAt: new Date().toISOString(),
+        scope: 'message',
+      };
+      onAdd(attachment);
+    } catch (err) {
+      setError(`Failed to read ${file.name}`);
+    }
   }, [onAdd]);
 
   const handleFiles = useCallback(async (files: FileList | null) => {
@@ -77,75 +78,11 @@ export function AttachmentBar({ attachments, onAdd, onRemove }: AttachmentBarPro
     for (const file of Array.from(files)) {
       await processFile(file);
     }
+    if (inputRef.current) inputRef.current.value = ''; 
   }, [processFile]);
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    handleFiles(e.dataTransfer.files);
-  };
-
-  if (attachments.length === 0) {
-    // Collapsed — show only the attach button
-    return (
-      <div className="flex items-center gap-1">
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept={ACCEPTED_TYPES.join(',')}
-          className="hidden"
-          onChange={(e) => handleFiles(e.target.files)}
-        />
-        <button
-          onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={handleDrop}
-          className={clsx(
-            'flex items-center gap-1 p-1.5 rounded text-gray-600 hover:text-gray-300 transition-colors',
-            isDragging && 'text-accent bg-accent/10',
-          )}
-          title="Attach files (SKILL.md, TOOL.md, .v, .toml, …)"
-        >
-          <Paperclip size={14} />
-        </button>
-        {error && (
-          <span className="text-[9px] text-error font-mono truncate max-w-[160px]">{error}</span>
-        )}
-      </div>
-    );
-  }
-
-  // Expanded — show chips + add button
   return (
-    <div
-      className={clsx(
-        'flex flex-wrap gap-1.5 p-2 border-t border-surface-overlay bg-surface-raised transition-colors',
-        isDragging && 'bg-accent/5 border-accent/30',
-      )}
-      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-      onDragLeave={() => setIsDragging(false)}
-      onDrop={handleDrop}
-    >
-      {attachments.map((att) => (
-        <AttachmentChip key={att.id} attachment={att} onRemove={() => onRemove(att.id)} />
-      ))}
-
-      {/* Add more */}
-      <button
-        onClick={() => inputRef.current?.click()}
-        className="flex items-center gap-1 px-2 py-1 rounded border border-dashed border-surface-overlay text-gray-600 hover:border-gray-500 hover:text-gray-400 text-[10px] font-mono transition-colors"
-      >
-        <Upload size={10} /> Add file
-      </button>
-
-      {error && (
-        <div className="w-full flex items-center gap-1.5 text-[10px] text-error font-mono">
-          <AlertTriangle size={10} /> {error}
-        </div>
-      )}
-
+    <div className="relative flex-shrink-0">
       <input
         ref={inputRef}
         type="file"
@@ -153,7 +90,51 @@ export function AttachmentBar({ attachments, onAdd, onRemove }: AttachmentBarPro
         accept={ACCEPTED_TYPES.join(',')}
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
+        disabled={disabled}
       />
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        disabled={disabled}
+        className="flex-shrink-0 w-10 h-10 rounded-lg bg-surface-elevated border border-surface-overlay text-gray-400 hover:text-white hover:bg-surface-overlay/80 disabled:opacity-40 disabled:text-gray-600 flex items-center justify-center transition-colors"
+        title="Attach files (.v, .sv, .md, .toml, ...)"
+      >
+        <Paperclip size={16} />
+      </button>
+
+      {error && (
+        <div className="absolute bottom-full left-0 mb-2 w-64 bg-error text-white text-[11px] p-2 rounded-lg shadow-xl font-mono z-50 flex items-start gap-1.5 border border-error/30">
+          <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="leading-snug">{error}</p>
+            <button 
+              type="button" 
+              onClick={() => setError(null)} 
+              className="text-[10px] underline block mt-1 text-gray-200 hover:text-white font-semibold"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Queue List / Preview Row Component
+interface AttachmentBarProps {
+  attachments: LocalAttachment[];
+  onRemove: (id: string) => void;
+}
+
+export function AttachmentBar({ attachments, onRemove }: AttachmentBarProps) {
+  if (attachments.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-2 mb-2 p-2 rounded-lg bg-surface-elevated/30 border border-surface-overlay/50 max-h-32 overflow-y-auto w-full transition-all">
+      {attachments.map((att) => (
+        <AttachmentChip key={att.id} attachment={att} onRemove={() => onRemove(att.id)} />
+      ))}
     </div>
   );
 }
@@ -164,24 +145,25 @@ function AttachmentChip({ attachment, onRemove }: { attachment: LocalAttachment;
 
   return (
     <>
-      <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-surface-elevated border border-surface-overlay group">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-elevated border border-surface-overlay group hover:border-gray-500 transition-colors">
         {getFileIcon(attachment.name)}
         <button
+          type="button"
           onClick={() => setShowPreview(true)}
-          className="text-[10px] font-mono text-gray-300 hover:text-white transition-colors"
+          className="text-xs font-mono text-gray-300 hover:text-white transition-colors truncate max-w-[180px]"
         >
           {attachment.name}
         </button>
-        <span className="text-[9px] text-gray-600 font-mono">{sizeKb}KB</span>
+        <span className="text-[10px] text-gray-600 font-mono">{sizeKb}KB</span>
         <button
+          type="button"
           onClick={onRemove}
-          className="text-gray-600 hover:text-error transition-colors ml-0.5"
+          className="text-gray-500 hover:text-error transition-colors ml-0.5"
         >
-          <X size={10} />
+          <X size={12} />
         </button>
       </div>
 
-      {/* Preview modal */}
       {showPreview && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"

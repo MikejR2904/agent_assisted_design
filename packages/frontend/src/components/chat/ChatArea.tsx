@@ -10,7 +10,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import { useAgentStore } from '../../lib/stores/agentStore';
 import { MessageBubble } from './MessageBubble';
 import { ApprovalCard } from './ApprovalCard';
-import { AttachmentBar } from './AttachmentBar';
+import { AttachmentBar, AttachmentButton } from './AttachmentBar';
 import type { LocalAttachment } from './AttachmentBar';
 
 // API Key Error Banner
@@ -220,13 +220,20 @@ export function ChatArea() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
+      {/* Input Section at bottom of ChatArea */}
       <div className="px-4 py-3 border-t border-surface-overlay bg-surface-raised">
         {!sessionId && isMounted && (
           <p className="text-xs text-warning font-mono mb-2">
             ⚠ No active session. Initialize a workspace first.
           </p>
         )}
+
+        {/* Move Attachment Bar up here: Now scales cleanly above the text box */}
+        <AttachmentBar
+          attachments={pendingAttachments}
+          onRemove={(id) => setPendingAttachments((prev) => prev.filter((a) => a.id !== id))}
+        />
+
         <div className="flex gap-2 items-end">
           {/* Agent dropdown */}
           <div className="relative flex-shrink-0">
@@ -247,6 +254,12 @@ export function ChatArea() {
             <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
           </div>
 
+          {/* Mount the new neatly-boxed layout button here */}
+          <AttachmentButton
+            onAdd={(att) => setPendingAttachments((prev) => [...prev, att])}
+            disabled={!sessionId || isProcessing}
+          />
+
           <textarea
             ref={textareaRef}
             value={input}
@@ -258,12 +271,7 @@ export function ChatArea() {
             rows={1}
             style={{ height: 'auto' }}
           />
-          {/* Attachment chips */}
-          <AttachmentBar
-            attachments={pendingAttachments}
-            onAdd={(att) => setPendingAttachments((prev) => [...prev, att])}
-            onRemove={(id) => setPendingAttachments((prev) => prev.filter((a) => a.id !== id))}
-          />
+
           <button
             onClick={handleSend}
             disabled={!input.trim() || isProcessing || !sessionId || !selectedAgentId}
@@ -274,6 +282,7 @@ export function ChatArea() {
               : <Send size={16} />
             }
           </button>
+          
           {isProcessing && (
             <button
               onClick={handleCancel}

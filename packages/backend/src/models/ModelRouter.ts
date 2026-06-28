@@ -158,7 +158,9 @@ export class ModelRouter {
       }
     }
     // Inform the user that no completion could be generated.
-    callbacks.onError(new Error('No models can be used to generate a completion. Please check your API keys and model availability or wait for usage to be available.'));
+    const error = new Error('No models can be used to generate a completion. Please check your API keys and model availability or wait for usage to be available.');
+    callbacks.onError(error);
+    throw error;
   }
  
   // Try to stream a completion from a specific model.

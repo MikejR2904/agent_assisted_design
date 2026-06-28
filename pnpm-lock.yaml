@@ -258,6 +258,9 @@ importers:
       winston:
         specifier: ^3.13.0
         version: 3.19.0
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
       zod:
         specifier: ^3.23.0
         version: 3.25.76
@@ -277,6 +280,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.0
+      '@types/ws':
+        specifier: ^8.5.10
+        version: 8.18.1
       nodemon:
         specifier: ^3.1.4
         version: 3.1.14

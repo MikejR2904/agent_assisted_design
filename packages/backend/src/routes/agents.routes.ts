@@ -75,11 +75,9 @@ export function agentsRouter(): Router {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
 
     const updated = { ...agents[idx], ...parsed.data, updatedAt: new Date().toISOString() };
-    if (updated.apiKey) {
+    if (parsed.data.apiKey) {
       // Encode if not already encoded (assume plaintext)
-      if (!updated.apiKey.startsWith('ey')) { // heuristic: base64 often starts with 'ey' for JSON
-        updated.apiKey = Buffer.from(updated.apiKey).toString('base64');
-      }
+      updated.apiKey = Buffer.from(parsed.data.apiKey).toString('base64');
     }
     agents[idx] = updated;
     await saveAgents(agents);

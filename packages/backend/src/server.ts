@@ -32,6 +32,12 @@ function preloadAgentsConfig(): void {
         logger.info(`Parsing ${configPath} array for agent-specific API keys...`);
         for (const agent of agents) {
           if (agent.apiKey && agent.apiKey.trim() !== '' && agent.apiKey !== 'DUMMY_KEY') {
+            let decodedKey = agent.apiKey;
+            try {
+              decodedKey = Buffer.from(agent.apiKey, 'base64').toString('utf-8');
+            } catch {
+              // If not valid base64, keep as is
+            }
             const model: string = agent.baseModel ?? '';
             let targetEnvKey = '';
             // Map the agent's baseModel selection back to its systemic environment variable
@@ -44,7 +50,7 @@ function preloadAgentsConfig(): void {
             if (targetEnvKey) {
               // Override if current process.env is missing or a dummy
               if (!process.env[targetEnvKey] || process.env[targetEnvKey] === 'DUMMY_KEY') {
-                process.env[targetEnvKey] = agent.apiKey;
+                process.env[targetEnvKey] = decodedKey;
                 logger.info(`Mapped agent key for [${agent.name}] directly into process.env.${targetEnvKey}`);
               }
             }
