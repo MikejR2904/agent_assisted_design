@@ -164,7 +164,7 @@ export class ModelRouter {
   }
  
   // Try to stream a completion from a specific model.
-  private async tryModel(
+  async tryModel(
     model: string,
     systemPrompt: string,
     messages: LLMMessage[],
