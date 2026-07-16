@@ -1,20 +1,23 @@
 import { spawn } from 'child_process';
 import path from 'path';
-import { TOOL_TIMEOUT_MS } from '@agent_design/shared';
 import type { ToolResult } from '@agent_design/shared';
 import { validateCommand } from '../utils/validation';
 import { logger } from '../utils/logger';
+import { ConfigManager } from '../config/ConfigManager';
 
 export class Sandbox {
   private readonly useDocker: boolean;
   private readonly dockerImage: string;
+  private readonly timeoutMs: number;
 
   constructor(
     private readonly workspaceRoot: string,
     options: { useDocker?: boolean; dockerImage?: string } = {},
   ) {
-    this.useDocker = options.useDocker ?? process.env.DOCKER_ENABLED === 'true';
-    this.dockerImage = options.dockerImage ?? process.env.DOCKER_IMAGE ?? 'rtl-tools:latest';
+    const { docker, eda } = ConfigManager.getInstance().get();
+    this.useDocker = options.useDocker ?? docker.enabled;
+    this.dockerImage = options.dockerImage ?? docker.image;
+    this.timeoutMs = eda.timeout;
   }
 
   async execute(
@@ -58,7 +61,7 @@ export class Sandbox {
           HOME: '/tmp',
           PATH: '/usr/local/bin:/usr/bin:/bin',
         },
-        timeout: TOOL_TIMEOUT_MS,
+        timeout: this.timeoutMs,
       });
 
       const stdoutChunks: Buffer[] = [];
@@ -71,7 +74,7 @@ export class Sandbox {
       const timer = setTimeout(() => {
         timedOut = true;
         proc.kill('SIGKILL');
-      }, TOOL_TIMEOUT_MS);
+      }, this.timeoutMs);
 
       proc.on('close', (code) => {
         clearTimeout(timer);

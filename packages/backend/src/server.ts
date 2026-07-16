@@ -11,13 +11,16 @@ import { TelemetryService } from './services/TelemetryService';
 import { SessionService } from './services/SessionService';
 import { ProjectService } from './services/ProjectService';
 import { logger } from './utils/logger';
+import { ConfigManager } from './config/ConfigManager';
+import { startConfigHotReload } from './config/hotReload';
 
-const PORT = parseInt(process.env.PORT ?? '5000', 10);
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? path.resolve(__dirname, '../../../workspaces');
+const appConfig = ConfigManager.getInstance().get();
+const PORT = appConfig.server.port;
+const WORKSPACE_ROOT = appConfig.paths.workspaceRoot!;
 const BASELINE_DIR = path.join(WORKSPACE_ROOT, 'baseline_stub');
-const CONFIG_ROOT = process.env.CONFIG_ROOT ?? path.resolve(__dirname, '../../../config');
-const SKILLS_ROOT = process.env.SKILLS_ROOT ?? path.resolve(__dirname, '../../../skills');
-const TELEMETRY_ROOT = process.env.TELEMETRY_ROOT ?? path.resolve(__dirname, '../../../telemetry');
+const CONFIG_ROOT = appConfig.paths.configRoot!;
+const SKILLS_ROOT = appConfig.paths.skillsRoot!;
+const TELEMETRY_ROOT = appConfig.paths.telemetryRoot!;
 
 function preloadAgentsConfig(): void {
   try {
@@ -79,11 +82,14 @@ async function main(): Promise<void> {
   // Create HTTP server
   const httpServer = http.createServer();
 
-  // Create WebSocket server + orchestrator
-  // We create a temporary io reference to satisfy circular dependency
+  // Single Socket.IO server instance, shared between Orchestrator (which broadcasts via
+  // `this.io.emit(...)`) and createWebSocketServer (which handles real client connections) — see
+  // the comment on createWebSocketServer for why these must not be two separate instances.
   const { Server: SocketIO } = await import('socket.io');
   const io = new SocketIO(httpServer, {
-    cors: { origin: process.env.FRONTEND_URL ?? 'http://localhost:3000' },
+    cors: { origin: appConfig.server.frontendUrl, methods: ['GET', 'POST'] },
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   const orchestrator = new Orchestrator(
@@ -96,11 +102,22 @@ async function main(): Promise<void> {
     BASELINE_DIR,
   );
 
-  // Create the Express app with orchestrator and attach WebSocket handlers
+  // Create the Express app with orchestrator and attach WebSocket handlers.
+  // Socket.IO's `new SocketIO(httpServer, ...)` above already registered its own internal
+  // 'request' listener on this same httpServer for its own path (default '/socket.io/'). Node's
+  // http.Server invokes every registered 'request' listener for every request — it doesn't stop
+  // at the first one that responds — so if Express were also wired to handle every request
+  // unconditionally, it would run a second time on top of a response Socket.IO already sent for
+  // its own paths, corrupting it. Skip Express entirely for Socket.IO's own path prefix.
   const app = createApp(orchestrator);
-  httpServer.on('request', app);
-  createWebSocketServer(httpServer, orchestrator);
+  const socketIoPath = '/socket.io/';
+  httpServer.on('request', (req, res) => {
+    if (req.url?.startsWith(socketIoPath)) return;
+    app(req, res);
+  });
+  createWebSocketServer(io, orchestrator);
   createTerminalServer(httpServer);
+  const configWatcher = startConfigHotReload();
 
   httpServer.listen(PORT, () => {
     logger.info(`🚀 Backend running on http://localhost:${PORT}`);
@@ -113,6 +130,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down gracefully`);
     await configService.destroy();
+    await configWatcher.close();
     httpServer.close(() => {
       logger.info('HTTP server closed');
       process.exit(0);

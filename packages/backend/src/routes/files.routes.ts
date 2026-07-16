@@ -5,10 +5,12 @@ import { FileService, FileEntry } from '../tools/FileService';
 import { logger } from '../utils/logger';
 import AdmZip, { IZipEntry } from 'adm-zip';
 import fs from 'fs/promises';
+import { ConfigManager } from '../config/ConfigManager';
 
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? path.resolve(process.cwd(), '../../workspaces');
-const SKILLS_ROOT = process.env.SKILLS_ROOT ?? path.resolve(process.cwd(), '../../skills');
-const CONFIG_ROOT = process.env.CONFIG_ROOT ?? path.resolve(process.cwd(), '../../config');
+const { paths } = ConfigManager.getInstance().get();
+const WORKSPACE_ROOT = paths.workspaceRoot ?? path.resolve(process.cwd(), '../../workspaces');
+const SKILLS_ROOT = paths.skillsRoot ?? path.resolve(process.cwd(), '../../skills');
+const CONFIG_ROOT = paths.configRoot ?? path.resolve(process.cwd(), '../../config');
 
 const upload = multer({
   storage: multer.memoryStorage(),

@@ -9,15 +9,18 @@ import { projectsRouter } from './routes/projects.routes';
 import { summaryRouter } from './routes/summary.routes';
 import { modelsRouter } from './routes/models.routes';
 import { providersRouter } from './routes/providers.routes';
+import { ragRouter } from './routes/rag.routes';
 import { TelemetryService } from './services/TelemetryService';
-import { logger } from './utils/logger';
 import path from 'path';
 import type { Orchestrator } from './orchestrator/Orchestrator';
 import { SessionService } from './services/SessionService';
 import { ProjectService } from './services/ProjectService';
+import { ConfigManager } from './config/ConfigManager';
+import { errorHandlerMiddleware } from './errors/ErrorHandler';
 
-const TELEMETRY_ROOT = process.env.TELEMETRY_ROOT ?? path.resolve(process.cwd(), '../../telemetry');
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? path.resolve(process.cwd(), '../../workspaces');
+const appConfig = ConfigManager.getInstance().get();
+const TELEMETRY_ROOT = appConfig.paths.telemetryRoot ?? path.resolve(process.cwd(), '../../telemetry');
+const WORKSPACE_ROOT = appConfig.paths.workspaceRoot ?? path.resolve(process.cwd(), '../../workspaces');
 const BASELINE_DIR = path.join(WORKSPACE_ROOT, 'baseline_stub');
 
 export function createApp(orchestrator?: Orchestrator): express.Application {
@@ -27,7 +30,7 @@ export function createApp(orchestrator?: Orchestrator): express.Application {
   const projectService = new ProjectService(TELEMETRY_ROOT, WORKSPACE_ROOT, BASELINE_DIR);
 
   app.use(cors({
-    origin: process.env.FRONTEND_URL ?? 'http://localhost:3000',
+    origin: appConfig.server.frontendUrl,
     credentials: true,
   }));
 
@@ -48,6 +51,7 @@ export function createApp(orchestrator?: Orchestrator): express.Application {
   app.use('/api/agents/summary', summaryRouter());
   app.use('/api/models', modelsRouter());
   app.use('/api/providers', providersRouter());
+  app.use('/api/rag', ragRouter());
 
   // Workspace routes (require orchestrator)
   if (orchestrator) {
@@ -55,10 +59,7 @@ export function createApp(orchestrator?: Orchestrator): express.Application {
   }
 
   // Global error handler
-  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    logger.error('Unhandled error', { err: err.message, stack: err.stack });
-    res.status(500).json({ error: 'Internal server error' });
-  });
+  app.use(errorHandlerMiddleware());
 
   return app;
 }

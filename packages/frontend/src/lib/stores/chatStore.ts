@@ -12,6 +12,8 @@ export interface ChatMessage {
   timestamp: Date;
   isStreaming?: boolean;
   toolRequest?: ToolRequest;
+  /** Chain-of-thought text, streamed separately from `content` — see stream:reasoning_token. */
+  reasoning?: string;
 }
 
 interface ChatStore {

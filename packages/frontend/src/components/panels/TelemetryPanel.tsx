@@ -1,6 +1,6 @@
 'use client';
 
-import { Activity, Cpu, Zap, Download, AlertCircle } from 'lucide-react';
+import { Activity, Cpu, Zap, Download, AlertCircle, Gauge } from 'lucide-react';
 import { useTelemetryStore } from '../../lib/stores/telemetryStore';
 import { useAgentStore } from '../../lib/stores/agentStore';
 import { clsx } from 'clsx';
@@ -20,7 +20,7 @@ const statusDots = {
 };
 
 export function TelemetryPanel() {
-  const { metrics, edaStatus, tokensByAgent, currentGate, condition, sessionId } = useTelemetryStore();
+  const { metrics, edaStatus, tokensByAgent, currentGate, condition, sessionId, latestPPA } = useTelemetryStore();
   const { agents } = useAgentStore();
 
   const activeAgents = agents.filter((a) => a.status === 'thinking' || a.status === 'awaiting-approval');
@@ -100,6 +100,21 @@ export function TelemetryPanel() {
           ))}
         </div>
       </Section>
+
+      {/* PPA Metrics */}
+      {latestPPA && (
+        <Section title="PPA Metrics" icon={<Gauge size={12} />}>
+          <div className="space-y-2">
+            <StatRow label="Area" value={`${latestPPA.area.toLocaleString()} µm²`} />
+            <StatRow label="Power" value={`${latestPPA.power.toFixed(2)} mW`} />
+            <StatRow label="Frequency" value={`${latestPPA.frequency.toFixed(1)} MHz`} />
+            <StatRow label="WNS" value={`${latestPPA.wns} ns`} color={latestPPA.wns < 0 ? 'text-error' : 'text-success'} />
+            <StatRow label="TNS" value={`${latestPPA.tns} ns`} color={latestPPA.tns < 0 ? 'text-error' : 'text-success'} />
+            {latestPPA.cells !== undefined && <StatRow label="Cells" value={latestPPA.cells.toLocaleString()} />}
+            {latestPPA.nets !== undefined && <StatRow label="Nets" value={latestPPA.nets.toLocaleString()} />}
+          </div>
+        </Section>
+      )}
 
       {/* Active Agents */}
       {activeAgents.length > 0 && (

@@ -11,9 +11,13 @@ import { ConfigService } from '../services/ConfigService';
 import { TelemetryService } from '../services/TelemetryService';
 import { SessionService } from '../services/SessionService';
 import { ProjectService } from '../services/ProjectService';
+import { GateService } from '../services/GateService';
+import { extractPPAFromOpenROAD } from '../utils/ppaExtractor';
 import { logger } from '../utils/logger';
 import path from 'path';
 import fs from 'fs/promises';
+
+const PPA_TOOLS = new Set(['run_openroad', 'run_opensta']);
 
 // Token Thresholds
 const TOKEN_SUMMARIZE_THRESHOLD = 120_000; // ~95% of 128k
@@ -29,8 +33,9 @@ export interface OrchestratorState {
 }
 
 export class Orchestrator {
-  private sessions = new Map<string, OrchestratorState>(); 
+  private sessions = new Map<string, OrchestratorState>();
   private reflexionLoop = new ReflexionLoop();
+  private gateService = new GateService();
   private modelRouter: ModelRouter;
   private agentFactory: AgentFactory;
   private cancellationTokens = new Map<string, { cancelled: boolean }>();
@@ -85,6 +90,7 @@ export class Orchestrator {
       projectId,
     };
     this.sessions.set(sessionId, state);
+    this.gateService.initialize(sessionId);
 
     // Log this session start
     await this.telemetryService.startSession(sessionId, condition, agentConfigs.map((a) => a.id));
@@ -176,6 +182,9 @@ export class Orchestrator {
       workspaceDir,
       effectiveProjectId,
     );
+    if (!this.gateService.getState(sessionId)) {
+      this.gateService.initialize(sessionId);
+    }
 
     // Determine which agent to use
     let agent: Agent;
@@ -233,6 +242,9 @@ export class Orchestrator {
           {
             onToken: (token) => {
               this.io.emit(WS_EVENTS.STREAM_TOKEN, { token, agentId: agent.id, sessionId });
+            },
+            onReasoningToken: (token) => {
+              this.io.emit(WS_EVENTS.REASONING_TOKEN, { token, agentId: agent.id, sessionId });
             },
             onComplete: async (response) => {
               responseContent = response.content;
@@ -324,6 +336,14 @@ export class Orchestrator {
           ? { tool: modified.command, args: modified.args }
           : toolReq;
 
+        // Gate check: physical-design tools (run_openroad/run_opensta) require G3 approval.
+        const gateCheck = this.gateService.canExecuteTool(sessionId, finalToolReq.tool);
+        if (!gateCheck.allowed) {
+          this.reflexionLoop.recordError(taskId, gateCheck.reason!);
+          agent.injectError(gateCheck.reason!);
+          continue;
+        }
+
         // Execute the tool
         try {
           const result = await agent.executeTool(finalToolReq);
@@ -345,6 +365,23 @@ export class Orchestrator {
             // The task may be complete; we let the loop continue to let the agent finalize.
             // However, if the agent's response indicates completion, it will exit on next iteration.
             // We don't set isComplete here; we let the agent decide.
+
+            if (PPA_TOOLS.has(finalToolReq.tool)) {
+              const ppa = extractPPAFromOpenROAD(`${result.stdout}\n${result.stderr}`);
+              if (ppa) {
+                await this.telemetryService.log({
+                  type: 'ppa_metrics',
+                  sessionId,
+                  agentId: agent.id,
+                  taskId,
+                  tool: finalToolReq.tool,
+                  timestamp: new Date().toISOString(),
+                  metrics: ppa,
+                });
+                agent.setPPAMetrics(ppa);
+                this.io.emit(WS_EVENTS.PPA_METRICS, { sessionId, agentId: agent.id, tool: finalToolReq.tool, metrics: ppa });
+              }
+            }
           } else {
             // Tool failed: record error, increment attempts, inject error, and loop
             const errorMsg = result.stderr || `Tool ${finalToolReq.tool} failed with exit code ${result.exitCode}`;
@@ -471,6 +508,7 @@ export class Orchestrator {
     if (!state) return;
     const fromGate = state.currentGate;
     state.currentGate = gate;
+    this.gateService.setGate(sessionId, gate);
 
     await this.telemetryService.log({
       type: 'gate_transition',
@@ -483,6 +521,28 @@ export class Orchestrator {
 
     this.io.emit(WS_EVENTS.GATE_CHANGED, { gate, fromGate, sessionId });
     logger.info('Gate advanced', { from: fromGate, to: gate, sessionId });
+  }
+
+  // Records a human approval for `gate` (distinct from setGate — advancing the *current* gate
+  // doesn't imply it was reviewed/approved). Unblocks physical-design tools once G3 is approved.
+  async approveGate(sessionId: string, gate: Gate, note?: string): Promise<void> {
+    if (!this.gateService.getState(sessionId)) {
+      this.gateService.initialize(sessionId);
+    }
+    this.gateService.approveGate(sessionId, gate, note);
+
+    await this.telemetryService.log({
+      type: 'gate_approval',
+      sessionId,
+      timestamp: new Date().toISOString(),
+      gate,
+      approved: true,
+      note,
+    });
+
+    const state = this.gateService.getState(sessionId)!;
+    this.io.emit(WS_EVENTS.GATE_APPROVAL_CHANGED, { sessionId, gate, approvals: state.approvals });
+    logger.info('Gate approved', { sessionId, gate, note });
   }
 
   getState(sessionId: string): OrchestratorState | null {

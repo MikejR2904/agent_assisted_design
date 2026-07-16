@@ -4,6 +4,7 @@ import { spawn } from 'node-pty';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import { ConfigManager } from '../config/ConfigManager';
 
 export function createTerminalServer(server: http.Server) {
   const wss = new WSS({ server, path: '/terminal' });
@@ -23,7 +24,8 @@ export function createTerminalServer(server: http.Server) {
       shell = process.env.SHELL || "/bin/bash";
     }
 
-    const targetCwd = path.resolve(process.env.WORKSPACE_ROOT ?? './workspaces', `condition_agent-assisted`);
+    const workspaceRoot = ConfigManager.getInstance().get().paths.workspaceRoot ?? './workspaces';
+    const targetCwd = path.resolve(workspaceRoot, `condition_agent-assisted`);
     // Ensure the target directory actually exists recursively
     if (!fs.existsSync(targetCwd)) {
       fs.mkdirSync(targetCwd, { recursive: true });

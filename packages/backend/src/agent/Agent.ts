@@ -1,9 +1,18 @@
-import type { AgentConfig, ToolResult } from '@agent_design/shared/types';
+import type { AgentConfig, AgentTool, ToolResult, PPAMetrics } from '@agent_design/shared/types';
 import type { ModelRouter, LLMMessage, StreamCallback } from '../models/ModelRouter';
 import type { ConfigService } from '../services/ConfigService';
 import type { TelemetryService } from '../services/TelemetryService';
 import type { ToolDispatch, ToolExecutor } from '../tools/ToolExecutor';
+import { ThinkingStreamSplitter } from './ThinkingStreamSplitter';
+import { AppError } from '../errors/AppError';
+import { ErrorCategory } from '../errors/ErrorTypes';
 import { logger } from '../utils/logger';
+
+// Extends StreamCallback with a channel for live reasoning tokens, split out of the model's
+// <thinking>...</thinking> block by ThinkingStreamSplitter — see streamResponse.
+export interface AgentStreamCallback extends StreamCallback {
+  onReasoningToken?: (token: string) => void;
+}
 
 // An Agent does:
 // - Holds conversation history.
@@ -14,6 +23,7 @@ import { logger } from '../utils/logger';
 export class Agent {
   private conversationHistory: LLMMessage[] = [];
   private memoryContext: string = '';
+  private latestPPA?: PPAMetrics;
 
   constructor(
     private readonly config: AgentConfig,
@@ -43,10 +53,17 @@ export class Agent {
     this.memoryContext = memory;
   }
 
+  // Fed back after a run_openroad/run_opensta tool call — kept separate from setMemoryContext
+  // (project-summary memory) so physical-design results and project memory don't clobber each
+  // other on refresh.
+  setPPAMetrics(metrics: PPAMetrics): void {
+    this.latestPPA = metrics;
+  }
+
   async buildSystemPrompt(gate: string, condition: string): Promise<string> {
     const skillContent = await this.configService.getSkillContent(this.config.id);
     const arch = this.configService.getArchConfig();
-    return [
+    const sections = [
       skillContent,
       '',
       '## Project Memory',
@@ -60,6 +77,24 @@ export class Agent {
       `- Scratchpad: ${arch.memory.scratchpad_kb} KB (ping-pong)`,
       `- Current Gate: ${gate}`,
       `- Experimental Condition: ${condition}`,
+    ];
+
+    if (this.latestPPA) {
+      const p = this.latestPPA;
+      sections.push(
+        '',
+        '## Latest Physical Design Metrics',
+        `- Area: ${p.area} µm²`,
+        `- Power: ${p.power} mW`,
+        `- Frequency: ${p.frequency} MHz`,
+        `- WNS: ${p.wns} ns${p.wns < 0 ? ' (setup violation)' : ''}`,
+        `- TNS: ${p.tns} ns`,
+        ...(p.cells !== undefined ? [`- Cells: ${p.cells}`] : []),
+        ...(p.nets !== undefined ? [`- Nets: ${p.nets}`] : []),
+      );
+    }
+
+    sections.push(
       '',
       '## Assigned Tools',
       this.config.assignedTools.map((t) => `- ${t}`).join('\n'),
@@ -69,7 +104,13 @@ export class Agent {
       `- Permission level: ${this.config.permissionLevel}`,
       '- Always output Verilog in fenced code blocks (```verilog ... ```).',
       '- When requesting a tool, use the format: TOOL_REQUEST: <tool_name> <args>',
-    ].join('\n');
+      '- Before your final answer, think through the problem inside <thinking>...</thinking> tags. Keep the tool-request format and your final answer outside those tags.',
+    );
+    if (this.config.assignedTools.includes('query_rag')) {
+      sections.push('- To search the knowledge base, request: TOOL_REQUEST: query_rag {"query": "...", "topK": 5}');
+    }
+
+    return sections.join('\n');
   }
 
   addUserMessage(content: string): void {
@@ -83,12 +124,19 @@ export class Agent {
   async streamResponse(
     userMessage: string,
     sessionId: string,
-    callbacks: StreamCallback,
+    callbacks: AgentStreamCallback,
     gate: string,
     condition: string,
   ): Promise<void> {
     const systemPrompt = await this.buildSystemPrompt(gate, condition);
     this.addUserMessage(userMessage);
+
+    // Splits the raw stream into answer/reasoning channels for the client's benefit only —
+    // response.content below (what gets stored and tool-parsed) is left untouched, tags and all.
+    const splitter = new ThinkingStreamSplitter(
+      callbacks.onToken,
+      callbacks.onReasoningToken ?? (() => {}),
+    );
 
     const startTime = Date.now();
     await this.modelRouter.streamCompletion(
@@ -96,8 +144,9 @@ export class Agent {
       systemPrompt,
       [...this.conversationHistory],
       {
-        onToken: callbacks.onToken,
+        onToken: (token) => splitter.push(token),
         onComplete: async (response) => {
+          splitter.flush();
           const durationMs = Date.now() - startTime;
           this.addAssistantMessage(response.content);
 
@@ -153,6 +202,14 @@ export class Agent {
   }
 
   async executeTool(toolRequest: { tool: string; args: Record<string, any> }): Promise<ToolResult> {
+    if (!this.config.assignedTools.includes(toolRequest.tool as AgentTool)) {
+      throw new AppError(
+        `Tool "${toolRequest.tool}" is not assigned to agent "${this.config.name}" (id: ${this.config.id})`,
+        ErrorCategory.VALIDATION,
+        false,
+        `This agent isn't permitted to use "${toolRequest.tool}".`,
+      );
+    }
     // Build the dispatch object based on the tool name
     const dispatch: ToolDispatch = this.buildDispatch(toolRequest);
     const { result } = await this.toolExecutor.execute(dispatch, this.config.id, 'task', 1);
@@ -181,6 +238,8 @@ export class Agent {
         return { tool: 'run_python', script: req.args.script, args: req.args.args };
       case 'run_riscv_as':
         return { tool: 'run_riscv_as', file: req.args.file, args: req.args.args };
+      case 'query_rag':
+        return { tool: 'query_rag', query: req.args.query, topK: req.args.topK };
       default:
         throw new Error(`Unsupported tool: ${req.tool}`);
     }

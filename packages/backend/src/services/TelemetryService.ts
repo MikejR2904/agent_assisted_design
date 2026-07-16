@@ -94,6 +94,9 @@ export class TelemetryService {
           metrics.gatesCompleted.push(event.toGate);
         }
         break;
+      case 'ppa_metrics':
+        metrics.latestPPA = event.metrics;
+        break;
     }
   }
 

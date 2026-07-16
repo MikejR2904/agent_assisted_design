@@ -1,25 +1,7 @@
 import { logger } from './logger';
+import type { PPAMetrics } from '@agent_design/shared/types';
 
-/**
- * Structured PPA metrics extracted from OpenROAD / OpenSTA log output.
- * All fields use SI units consistent with SKY130 PDK reporting.
- */
-export interface PPAMetrics {
-  /** Die area in µm² (from "Chip area for module" or "Design area" lines). */
-  area: number;
-  /** Total power in mW (from "Total" row in "Power Report"). */
-  power: number;
-  /** Target / achieved clock frequency in MHz, derived from WNS + period. */
-  frequency: number;
-  /** Worst Negative Slack in ns (negative = setup violation). */
-  wns: number;
-  /** Total Negative Slack in ns (negative = cumulative violation). */
-  tns: number;
-  /** Number of standard cells placed. */
-  cells?: number;
-  /** Number of nets. */
-  nets?: number;
-}
+export type { PPAMetrics };
 
 // ── Regex patterns ─────────────────────────────────────────────────────────────
 

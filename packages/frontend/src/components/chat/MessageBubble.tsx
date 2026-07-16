@@ -1,14 +1,44 @@
 'use client';
 
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Brain, User, Info, Terminal } from 'lucide-react';
+import { Brain, User, Info, Terminal, Lightbulb, ChevronDown } from 'lucide-react';
 import type { ChatMessage } from '../../lib/stores/chatStore';
 import { useAgentStore } from '../../lib/stores/agentStore';
 import { clsx } from 'clsx';
 
 interface MessageBubbleProps {
   message: ChatMessage;
+}
+
+function ChainOfThought({ message }: { message: ChatMessage }) {
+  // null = follow the automatic rule (expanded while still in the reasoning phase, i.e.
+  // streaming with no answer content yet); true/false = the user explicitly toggled it.
+  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+  const autoExpanded = !!message.isStreaming && !message.content;
+  const expanded = manualExpanded ?? autoExpanded;
+
+  return (
+    <div className="mb-2 rounded border border-surface-overlay bg-surface overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setManualExpanded(!expanded)}
+        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left hover:bg-surface-elevated transition-colors"
+      >
+        <Lightbulb size={11} className="text-gray-500 flex-shrink-0" />
+        <span className="text-[10px] text-gray-500 font-mono uppercase tracking-wider flex-1">
+          Chain of Thought{autoExpanded && !message.content && ' — thinking…'}
+        </span>
+        <ChevronDown size={12} className={clsx('text-gray-600 transition-transform flex-shrink-0', expanded && 'rotate-180')} />
+      </button>
+      {expanded && (
+        <pre className="text-[11px] text-gray-500 font-mono whitespace-pre-wrap px-2.5 pb-2 max-h-64 overflow-y-auto">
+          {message.reasoning}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
@@ -60,6 +90,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             {agent.name} · {agent.roleDescription}
           </p>
         )}
+        {!isUser && message.reasoning && <ChainOfThought message={message} />}
         <div className={clsx(
           'rounded-lg px-3 py-2.5 text-sm',
           isUser

@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { assertPathInWorkspace } from '../utils/validation';
 import { logger } from '../utils/logger';
+import { AppError } from '../errors/AppError';
+import { ErrorCategory } from '../errors/ErrorTypes';
 
 // Handle file operations within the agent's workspace
 export interface FileEntry {
@@ -36,7 +38,12 @@ export class FileService {
         return full.startsWith(allowedAbs + path.sep) || full === allowedAbs;
       });
       if (!inAllowed) {
-        throw new Error(`Access denied: ${relativePath} is outside allowed paths: ${this.allowedPaths.join(', ')}`);
+        throw new AppError(
+          `Access denied: ${relativePath} is outside allowed paths: ${this.allowedPaths.join(', ')}`,
+          ErrorCategory.VALIDATION,
+          false,
+          `Access denied: "${relativePath}" is outside this agent's allowed paths.`,
+        );
       }
     }
     return full;
@@ -50,7 +57,12 @@ export class FileService {
   async writeFile(relativePath: string, content: string): Promise<void> {
     const full = this.resolve(relativePath);
     if (LOCKED_FILES.some((f) => full.endsWith(f))) {
-      throw new Error(`File is locked and cannot be written: ${relativePath}`);
+      throw new AppError(
+        `File is locked and cannot be written: ${relativePath}`,
+        ErrorCategory.VALIDATION,
+        false,
+        `"${relativePath}" is a protected file and cannot be modified.`,
+      );
     }
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, content, 'utf-8');

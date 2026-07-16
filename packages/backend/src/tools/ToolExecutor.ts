@@ -2,7 +2,30 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ToolRequest, ToolResult } from '@agent_design/shared/types';
 import { FileService } from './FileService';
 import { Sandbox } from './Sandbox';
+import { RagService } from '../services/RagService';
 import { logger } from '../utils/logger';
+import { ConfigManager } from '../config/ConfigManager';
+import { AppError } from '../errors/AppError';
+import { ErrorCategory } from '../errors/ErrorTypes';
+import { withRetry } from '../errors/ErrorHandler';
+
+// Node fs error codes that represent a genuinely transient failure worth a short retry (a file
+// momentarily locked by another process, too many open handles) — as opposed to e.g. ENOENT
+// (file doesn't exist) or an AppError from a deliberate security rejection, neither of which
+// retrying would ever fix.
+const TRANSIENT_FS_CODES = new Set(['EBUSY', 'EMFILE', 'ENFILE', 'EAGAIN']);
+
+function toToolError(err: unknown): AppError {
+  if (err instanceof AppError) return err;
+  const code = (err as NodeJS.ErrnoException)?.code;
+  const retryable = !!code && TRANSIENT_FS_CODES.has(code);
+  return new AppError(
+    err instanceof Error ? err.message : String(err),
+    ErrorCategory.TOOL_EXECUTION,
+    retryable,
+    'A file operation failed. Please try again.',
+  );
+}
 
 export type ToolDispatch =
   | { tool: 'read_file'; path: string }
@@ -13,7 +36,8 @@ export type ToolDispatch =
   | { tool: 'run_openroad'; args: string[] }
   | { tool: 'run_opensta'; args: string[] }
   | { tool: 'run_python'; script: string; args?: string[] }
-  | { tool: 'run_riscv_as'; file: string; args?: string[] };
+  | { tool: 'run_riscv_as'; file: string; args?: string[] }
+  | { tool: 'query_rag'; query: string; topK?: number };
 
 export class ToolExecutor {
   constructor(
@@ -21,18 +45,23 @@ export class ToolExecutor {
     private readonly sandbox: Sandbox,
   ) {}
 
+  private runFileOp<T>(fn: () => Promise<T>): Promise<T> {
+    return withRetry(() => fn().catch((err) => { throw toToolError(err); }));
+  }
+
   async execute(dispatch: ToolDispatch, agentId: string, taskId: string, attempt: number): Promise<{
     request: ToolRequest;
     result: ToolResult;
   }> {
     const requestId = uuidv4();
+    const { eda } = ConfigManager.getInstance().get();
     let command = '';
     let args: string[] = [];
     let reason = '';
 
     switch (dispatch.tool) {
       case 'read_file': {
-        const content = await this.fileService.readFile(dispatch.path);
+        const content = await this.runFileOp(() => this.fileService.readFile(dispatch.path));
         const request: ToolRequest = {
           id: requestId,
           agentId,
@@ -60,7 +89,7 @@ export class ToolExecutor {
       }
 
       case 'write_rtl': {
-        await this.fileService.writeFile(dispatch.path, dispatch.content);
+        await this.runFileOp(() => this.fileService.writeFile(dispatch.path, dispatch.content));
         const request: ToolRequest = {
           id: requestId,
           agentId,
@@ -88,7 +117,7 @@ export class ToolExecutor {
       }
 
       case 'list_files': {
-        const entries = await this.fileService.listDirectory(dispatch.path ?? '.');
+        const entries = await this.runFileOp(() => this.fileService.listDirectory(dispatch.path ?? '.'));
         const request: ToolRequest = {
           id: requestId,
           agentId,
@@ -115,8 +144,40 @@ export class ToolExecutor {
         };
       }
 
+      case 'query_rag': {
+        const results = await RagService.getInstance().query(dispatch.query, dispatch.topK);
+        const request: ToolRequest = {
+          id: requestId,
+          agentId,
+          taskId,
+          tool: 'query_rag',
+          command: `query_rag "${dispatch.query}"`,
+          args: [dispatch.query],
+          reason: 'Query RAG knowledge base',
+          attemptNumber: attempt,
+          maxAttempts: 3,
+          timestamp: new Date().toISOString(),
+        };
+        return {
+          request,
+          result: {
+            requestId,
+            exitCode: 0,
+            stdout: results.length
+              ? JSON.stringify(results, null, 2)
+              : 'No results (RAG knowledge base is empty or unavailable).',
+            stderr: '',
+            durationMs: 0,
+            success: true,
+            timedOut: false,
+          },
+        };
+      }
+
       case 'run_verilator':
-        command = 'verilator';
+        // Falls back to the bare command name (PATH lookup) when no path is configured —
+        // identical to today's behavior unless eda.verilatorPath is set.
+        command = eda.verilatorPath || 'verilator';
         args = dispatch.args;
         reason = 'Run Verilator lint/simulation';
         break;
@@ -128,13 +189,13 @@ export class ToolExecutor {
         break;
 
       case 'run_openroad':
-        command = 'openroad';
+        command = eda.openroadPath || 'openroad';
         args = dispatch.args;
         reason = 'Run OpenROAD P&R';
         break;
 
       case 'run_opensta':
-        command = 'opensta';
+        command = eda.openstaPath || 'opensta';
         args = dispatch.args;
         reason = 'Run OpenSTA timing analysis';
         break;

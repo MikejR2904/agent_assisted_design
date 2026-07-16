@@ -79,22 +79,26 @@ export const WS_EVENTS = {
   DENY_TOOL: 'tool:deny',
   MODIFY_TOOL: 'tool:modify',
   SET_GATE: 'gate:set',
+  APPROVE_GATE: 'gate:approve',
   INIT_WORKSPACE: 'workspace:init',
   JOIN_SESSION: 'session:join',
- 
+
   // Server -> Client
   STREAM_TOKEN: 'stream:token',
   STREAM_DONE: 'stream:done',
+  REASONING_TOKEN: 'stream:reasoning_token',
   TOOL_REQUEST: 'tool:request',
   TOOL_RESULT: 'tool:result',
   AGENT_STATUS: 'agent:status',
   GATE_CHANGED: 'gate:changed',
+  GATE_APPROVAL_CHANGED: 'gate:approval_changed',
   TELEMETRY_UPDATE: 'telemetry:update',
+  PPA_METRICS: 'ppa:metrics',
   ERROR: 'error',
   SESSION_RESET: 'session:reset',
   APPROVAL_REQUEST: 'tool:approval_request',
   TASK_COMPLETE: 'task:complete',
-  TASK_CANCEL: 'task:cancel', 
+  TASK_CANCEL: 'task:cancel',
 } as const;
  
 // EDA tool status labels for UI display. These labels are used to provide a user-friendly name for each EDA tool in the frontend interface. The keys correspond to the tool identifiers used in the backend, and the values are the human-readable labels displayed to users.

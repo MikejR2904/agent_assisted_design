@@ -33,12 +33,34 @@ export const TelemetryEventTypeSchema = z.enum([
   'tool_result',
   'human_action',
   'gate_transition',
+  'gate_approval',
   'session_start',
   'session_end',
   'error',
   'max_attempts_exceeded',
+  'ppa_metrics',
 ]);
 export type TelemetryEventType = z.infer<typeof TelemetryEventTypeSchema>;
+
+// Structured PPA (Power/Performance/Area) metrics extracted from OpenROAD/OpenSTA log output.
+// All fields use SI units consistent with SKY130 PDK reporting.
+export const PPAMetricsSchema = z.object({
+  /** Die area in µm² (from "Chip area for module" or "Design area" lines). */
+  area: z.number(),
+  /** Total power in mW (from "Total" row in "Power Report"). */
+  power: z.number(),
+  /** Target / achieved clock frequency in MHz, derived from WNS + period. */
+  frequency: z.number(),
+  /** Worst Negative Slack in ns (negative = setup violation). */
+  wns: z.number(),
+  /** Total Negative Slack in ns (negative = cumulative violation). */
+  tns: z.number(),
+  /** Number of standard cells placed. */
+  cells: z.number().optional(),
+  /** Number of nets. */
+  nets: z.number().optional(),
+});
+export type PPAMetrics = z.infer<typeof PPAMetricsSchema>;
 
 // Define the schema for human actions when the agent asks for user approval on: 1) the design itself or 2) a specific tool execution (e.g. running a simulation, running a lint check, etc.)
 export const HumanActionSchema = z.enum(['approved', 'denied', 'modified']);
@@ -116,6 +138,14 @@ export const TelemetryEventSchema = z.discriminatedUnion('type', [
     triggeredBy: z.enum(['human', 'agent']),
   }),
   z.object({
+    type: z.literal('gate_approval'),
+    sessionId: z.string(),
+    timestamp: z.string(),
+    gate: GateSchema,
+    approved: z.literal(true),
+    note: z.string().optional(),
+  }),
+  z.object({
     type: z.literal('session_start'),
     sessionId: z.string(),
     timestamp: z.string(),
@@ -150,6 +180,15 @@ export const TelemetryEventSchema = z.discriminatedUnion('type', [
     attempts: z.number(),
     lastError: z.string(),
   }),
+  z.object({
+    type: z.literal('ppa_metrics'),
+    agentId: z.string(),
+    sessionId: z.string(),
+    timestamp: z.string(),
+    taskId: z.string().optional(),
+    tool: z.string(),
+    metrics: PPAMetricsSchema,
+  }),
 ]);
 export type TelemetryEvent = z.infer<typeof TelemetryEventSchema>;
 
@@ -168,4 +207,5 @@ export interface SessionMetrics {
   toolFailures: number;
   gatesCompleted: Gate[];
   durationMs: number;
+  latestPPA?: PPAMetrics;
 }

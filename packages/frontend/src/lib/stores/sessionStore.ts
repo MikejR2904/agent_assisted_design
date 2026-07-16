@@ -4,6 +4,12 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ExperimentalCondition, Gate, Attachment } from '@agent_design/shared/types';
 import type { ChatMessage } from './chatStore';
 
+export interface GateApproval {
+  approved: boolean;
+  timestamp?: string;
+  note?: string;
+}
+
 export interface ChatSession {
   id: string;
   projectId: string | null;
@@ -16,6 +22,7 @@ export interface ChatSession {
   updatedAt: string;
   totalTokens: number;
   gatesCompleted: Gate[];
+  gateApprovals: Record<Gate, GateApproval>;
 }
 
 interface SessionStore {
@@ -37,6 +44,7 @@ interface SessionStore {
   updateLastMessage: (updater: (msg: ChatMessage) => ChatMessage) => void;
   updateTokens: (delta: number) => void;
   completeGate: (gate: Gate) => void;
+  setGateApproval: (gate: Gate, approval: GateApproval) => void;
 
   // Attachment management
   addAttachment: (sessionId: string, attachment: Attachment) => void;
@@ -68,6 +76,12 @@ function newSession(condition: ExperimentalCondition, projectId: string | null =
     updatedAt: now,
     totalTokens: 0,
     gatesCompleted: [],
+    gateApprovals: {
+      G1: { approved: false },
+      G2: { approved: false },
+      G3: { approved: false },
+      G4: { approved: false },
+    },
   };
 }
 
@@ -185,6 +199,17 @@ export const useSessionStore = create<SessionStore>()(
             if (s.id !== state.activeSessionId) return s;
             if (s.gatesCompleted.includes(gate)) return s;
             return { ...s, gatesCompleted: [...s.gatesCompleted, gate] };
+          }),
+        }));
+      },
+
+      setGateApproval: (gate, approval) => {
+        set((state) => ({
+          sessions: state.sessions.map((s) => {
+            if (s.id !== state.activeSessionId) return s;
+            // Sessions persisted before gateApprovals existed may not have the field yet.
+            const existing = s.gateApprovals ?? { G1: { approved: false }, G2: { approved: false }, G3: { approved: false }, G4: { approved: false } };
+            return { ...s, gateApprovals: { ...existing, [gate]: approval } };
           }),
         }));
       },

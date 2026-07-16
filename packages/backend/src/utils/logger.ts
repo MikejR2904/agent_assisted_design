@@ -1,10 +1,12 @@
 import winston from 'winston';
 import path from 'path';
+import { ConfigManager } from '../config/ConfigManager';
 
-const TELEMETRY_ROOT = process.env.TELEMETRY_ROOT ?? path.resolve(process.cwd(), '../../telemetry');
+const { paths, telemetry } = ConfigManager.getInstance().get();
+const TELEMETRY_ROOT = paths.telemetryRoot ?? path.resolve(process.cwd(), '../../telemetry');
 
 export const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL ?? 'info',
+  level: telemetry.logLevel,
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),

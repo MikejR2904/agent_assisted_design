@@ -3,7 +3,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { WS_EVENTS } from '@agent_design/shared/constants';
-import type { Gate, SessionMetrics, ToolRequest } from '@agent_design/shared/types';
+import type { Gate, SessionMetrics, ToolRequest, PPAMetrics } from '@agent_design/shared/types';
+import type { GateApproval } from '../lib/stores/sessionStore';
 import { useChatStore } from '../lib/stores/chatStore';
 import { useSessionStore, ChatSession } from '../lib/stores/sessionStore';
 import { useTelemetryStore } from '../lib/stores/telemetryStore';
@@ -42,9 +43,9 @@ function buildApiKeyGuidance(raw: string): string {
 export function useWebSocket() {
   const socketRef = useRef<Socket | null>(null);
   const { finalizeLastMessage, setPendingToolRequest, setProcessing, setApiKeyError, setConnectionError } = useChatStore();
-  const { setCurrentGate, updateMetrics, setSessionId } = useTelemetryStore();
+  const { setCurrentGate, updateMetrics, setSessionId, setPPAMetrics } = useTelemetryStore();
   const { setAgentStatus } = useAgentStore();
-  const { activeSessionId, createSession, addMessage, updateLastMessage, getActiveSession, activeCondition } = useSessionStore();
+  const { activeSessionId, createSession, addMessage, updateLastMessage, getActiveSession, activeCondition, setGateApproval } = useSessionStore();
   const { getActiveProject } = useProjectStore();
 
   useEffect(() => {
@@ -77,6 +78,14 @@ export function useWebSocket() {
       updateLastMessage((msg) => ({
         ...msg,
         content: msg.content + token,
+        isStreaming: true,
+      }));
+    });
+
+    socket.on(WS_EVENTS.REASONING_TOKEN, ({ token }: { token: string }) => {
+      updateLastMessage((msg) => ({
+        ...msg,
+        reasoning: (msg.reasoning ?? '') + token,
         isStreaming: true,
       }));
     });
@@ -117,8 +126,16 @@ export function useWebSocket() {
       setCurrentGate(gate);
     });
 
+    socket.on(WS_EVENTS.GATE_APPROVAL_CHANGED, ({ gate, approvals }: { gate: Gate; approvals: Record<Gate, GateApproval> }) => {
+      setGateApproval(gate, approvals[gate]);
+    });
+
     socket.on(WS_EVENTS.TELEMETRY_UPDATE, ({ metrics }: { metrics: SessionMetrics }) => {
       updateMetrics(metrics);
+    });
+
+    socket.on(WS_EVENTS.PPA_METRICS, ({ metrics }: { metrics: PPAMetrics }) => {
+      setPPAMetrics(metrics);
     });
 
     socket.on(WS_EVENTS.SESSION_RESET, ({ sessionId }: { sessionId: string }) => {
@@ -144,11 +161,14 @@ export function useWebSocket() {
       socket.off('connect_error');
       socket.off('disconnect');
       socket.off(WS_EVENTS.STREAM_TOKEN);
+      socket.off(WS_EVENTS.REASONING_TOKEN);
       socket.off(WS_EVENTS.STREAM_DONE);
       socket.off(WS_EVENTS.TOOL_REQUEST);
       socket.off(WS_EVENTS.TOOL_RESULT);
       socket.off(WS_EVENTS.GATE_CHANGED);
+      socket.off(WS_EVENTS.GATE_APPROVAL_CHANGED);
       socket.off(WS_EVENTS.TELEMETRY_UPDATE);
+      socket.off(WS_EVENTS.PPA_METRICS);
       socket.off(WS_EVENTS.ERROR);
     };
   }, [activeSessionId]);
@@ -234,6 +254,12 @@ export function useWebSocket() {
     socketRef.current?.emit(WS_EVENTS.SET_GATE, { gate, sessionId: session.id });
   }, [activeSessionId]);
 
+  const approveGate = useCallback((gate: Gate, note?: string) => {
+    const session = getActiveSession();
+    if (!session) return;
+    socketRef.current?.emit(WS_EVENTS.APPROVE_GATE, { gate, sessionId: session.id, note });
+  }, [activeSessionId]);
+
   const initWorkspace = useCallback((condition: string, sessionId: string, agents: unknown[]) => {
     socketRef.current?.emit(WS_EVENTS.INIT_WORKSPACE, { condition, sessionId, agents });
   }, []);
@@ -245,5 +271,5 @@ export function useWebSocket() {
     setProcessing(false); // immediately reflect stopped state in UI
   }, [activeSessionId]);
 
-  return { sendMessage, approveTool, denyTool, modifyTool, advanceGate, initWorkspace, cancelTask };
+  return { sendMessage, approveTool, denyTool, modifyTool, advanceGate, approveGate, initWorkspace, cancelTask };
 }

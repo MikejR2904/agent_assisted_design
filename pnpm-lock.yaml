@@ -66,7 +66,7 @@ importers:
     dependencies:
       '@azure/core-auth':
         specifier: ^1.5.0
-        version: 1.10.1(supports-color@5.5.0)
+        version: 1.10.1
       '@microsoft/kiota-abstractions':
         specifier: ^1.0.0-preview.103
         version: 1.0.0-preview.103
@@ -219,6 +219,9 @@ importers:
       '@microsoft/kiota-http-fetchlibrary':
         specifier: workspace:*
         version: link:../../external/kiota-typescript/packages/http/fetch
+      '@qdrant/js-client-rest':
+        specifier: ^1.18.0
+        version: 1.18.0(typescript@5.9.3)
       better-sqlite3:
         specifier: ^9.6.0
         version: 9.6.0
@@ -1219,6 +1222,16 @@ packages:
     resolution: {integrity: sha512-cKA5B6lpFEMyMGjxF54QihfYpB4FkEGH+qZhtArDEG+wezQAJY8Pq6C7T1SjWz+FFzt3TbyoXBQYk/0292TdJA==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@qdrant/js-client-rest@1.18.0':
+    resolution: {integrity: sha512-/0dqX5uV9chC1DnYSnU4gNMrDqse/pt6hHg3Rqqpl5isH7xl1xSNvffjzBoxycDD79luWn7Ho6Rh/61sOs5DNw==}
+    engines: {node: '>=18.17.0', pnpm: '>=8'}
+    peerDependencies:
+      typescript: '>=4.7'
+
+  '@qdrant/openapi-typescript-fetch@1.2.6':
+    resolution: {integrity: sha512-oQG/FejNpItrxRHoyctYvT3rwGZOnK4jr3JdppO/c78ktDvkWiPXPHNsrDf33K9sZdRb6PR7gi4noIapu5q4HA==}
+    engines: {node: '>=18.0.0', pnpm: '>=8'}
 
   '@rollup/rollup-android-arm-eabi@4.62.2':
     resolution: {integrity: sha512-6o7ZLZK+BeenkZCFNDXqpbjw9bD6nuWonvS/lwQJp7NoVVxm6p3qE7qQ5jGuBjiFsgvqjD8mZAU5oWxTmbOeOg==}
@@ -4338,6 +4351,10 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
+  undici@6.27.0:
+    resolution: {integrity: sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg==}
+    engines: {node: '>=18.17'}
+
   unified@11.0.5:
     resolution: {integrity: sha512-xKvGhPWw3k84Qjh8bI3ZeJjqnyadK+GEFtazSfZv/rKeTkTjOJho6mFqh2SM96iIcZokxiOpg78GazTSg8+KHA==}
 
@@ -4623,10 +4640,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/core-auth@1.10.1(supports-color@5.5.0)':
+  '@azure/core-auth@1.10.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-util': 1.13.1(supports-color@5.5.0)
+      '@azure/core-util': 1.13.1
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -4634,10 +4651,10 @@ snapshots:
   '@azure/core-client@1.10.2':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
+      '@azure/core-auth': 1.10.1
       '@azure/core-rest-pipeline': 1.24.0
       '@azure/core-tracing': 1.3.1
-      '@azure/core-util': 1.13.1(supports-color@5.5.0)
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.3.0
       tslib: 2.8.1
     transitivePeerDependencies:
@@ -4646,11 +4663,11 @@ snapshots:
   '@azure/core-rest-pipeline@1.24.0':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
+      '@azure/core-auth': 1.10.1
       '@azure/core-tracing': 1.3.1
-      '@azure/core-util': 1.13.1(supports-color@5.5.0)
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.3.0
-      '@typespec/ts-http-runtime': 0.3.6(supports-color@5.5.0)
+      '@typespec/ts-http-runtime': 0.3.6
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -4659,10 +4676,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/core-util@1.13.1(supports-color@5.5.0)':
+  '@azure/core-util@1.13.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@typespec/ts-http-runtime': 0.3.6(supports-color@5.5.0)
+      '@typespec/ts-http-runtime': 0.3.6
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -4670,11 +4687,11 @@ snapshots:
   '@azure/identity@4.13.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
+      '@azure/core-auth': 1.10.1
       '@azure/core-client': 1.10.2
       '@azure/core-rest-pipeline': 1.24.0
       '@azure/core-tracing': 1.3.1
-      '@azure/core-util': 1.13.1(supports-color@5.5.0)
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.3.0
       '@azure/msal-browser': 5.14.0
       '@azure/msal-node': 5.2.5
@@ -4685,7 +4702,7 @@ snapshots:
 
   '@azure/logger@1.3.0':
     dependencies:
-      '@typespec/ts-http-runtime': 0.3.6(supports-color@5.5.0)
+      '@typespec/ts-http-runtime': 0.3.6
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -5153,7 +5170,7 @@ snapshots:
 
   '@microsoft/agents-m365copilot-core@1.0.0':
     dependencies:
-      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
+      '@azure/core-auth': 1.10.1
       '@microsoft/kiota-authentication-azure': 1.0.0-preview.103
       '@microsoft/kiota-bundle': 1.0.0-preview.103
       tslib: 2.8.1
@@ -5175,7 +5192,7 @@ snapshots:
 
   '@microsoft/kiota-authentication-azure@1.0.0-preview.103':
     dependencies:
-      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
+      '@azure/core-auth': 1.10.1
       '@microsoft/kiota-abstractions': 1.0.0-preview.103
       '@opentelemetry/api': 1.9.1
       tslib: 2.8.1
@@ -5535,6 +5552,14 @@ snapshots:
   '@playwright/test@1.61.0':
     dependencies:
       playwright: 1.61.0
+
+  '@qdrant/js-client-rest@1.18.0(typescript@5.9.3)':
+    dependencies:
+      '@qdrant/openapi-typescript-fetch': 1.2.6
+      typescript: 5.9.3
+      undici: 6.27.0
+
+  '@qdrant/openapi-typescript-fetch@1.2.6': {}
 
   '@rollup/rollup-android-arm-eabi@4.62.2':
     optional: true
@@ -5926,10 +5951,10 @@ snapshots:
       '@typescript-eslint/types': 7.18.0
       eslint-visitor-keys: 3.4.3
 
-  '@typespec/ts-http-runtime@0.3.6(supports-color@5.5.0)':
+  '@typespec/ts-http-runtime@0.3.6':
     dependencies:
-      http-proxy-agent: 7.0.2(supports-color@5.5.0)
-      https-proxy-agent: 7.0.6(supports-color@5.5.0)
+      http-proxy-agent: 7.0.2
+      https-proxy-agent: 7.0.6
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -7397,14 +7422,14 @@ snapshots:
       statuses: 2.0.2
       toidentifier: 1.0.1
 
-  http-proxy-agent@7.0.2(supports-color@5.5.0):
+  http-proxy-agent@7.0.2:
     dependencies:
       agent-base: 7.1.4
       debug: 4.4.3(supports-color@5.5.0)
     transitivePeerDependencies:
       - supports-color
 
-  https-proxy-agent@7.0.6(supports-color@5.5.0):
+  https-proxy-agent@7.0.6:
     dependencies:
       agent-base: 7.1.4
       debug: 4.4.3(supports-color@5.5.0)
@@ -9374,6 +9399,8 @@ snapshots:
   undici-types@5.26.5: {}
 
   undici-types@6.21.0: {}
+
+  undici@6.27.0: {}
 
   unified@11.0.5:
     dependencies:

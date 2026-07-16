@@ -14,3 +14,7 @@ yarn.lock
 telemetry/
 workspaces/
 
+# RAG source documents (dropped in locally, not checked in)
+/rag_sources/*
+!/rag_sources/README.md
+

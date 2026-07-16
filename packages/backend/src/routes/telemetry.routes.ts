@@ -2,8 +2,10 @@ import { Router } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
 import { TelemetryService } from '../services/TelemetryService';
+import { ConfigManager } from '../config/ConfigManager';
 
-const TELEMETRY_ROOT = process.env.TELEMETRY_ROOT ?? path.resolve(process.cwd(), '../../telemetry');
+const TELEMETRY_ROOT = ConfigManager.getInstance().get().paths.telemetryRoot
+  ?? path.resolve(process.cwd(), '../../telemetry');
 
 export function telemetryRouter(telemetryService: TelemetryService): Router {
   const router = Router();

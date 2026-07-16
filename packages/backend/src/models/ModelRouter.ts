@@ -1,9 +1,10 @@
-// Import shared fallback chain models
-import { MODEL_FALLBACK_CHAIN } from '@agent_design/shared';
 import type { BaseModel } from '@agent_design/shared/types';
 import { logger } from '../utils/logger';
 import { ProviderRegistry } from './ProviderRegistry';
 import { ProviderConfigLoader } from '../config/ProviderConfigLoader';
+import { ConfigManager } from '../config/ConfigManager';
+import { AppError } from '../errors/AppError';
+import { ErrorCategory } from '../errors/ErrorTypes';
 
 // --------------------------------------------------------------------------------------------------
 // Define interfaces for LLM messages, responses, and streaming callbacks.
@@ -86,7 +87,8 @@ export class ModelRouter {
     callbacks: StreamCallback,
   ): Promise<void> {
     // Build fallback chain starting with preferred model
-    const chain = [preferredModel, ...MODEL_FALLBACK_CHAIN.filter((m) => m !== preferredModel)];
+    const { fallbackChain } = ConfigManager.getInstance().get().llm;
+    const chain = [preferredModel, ...fallbackChain.filter((m) => m !== preferredModel)];
     // For each model, try to stream a completion. If it fails, log the error and try the next model in the chain. If all models fail, inform user.
     const attempted: string[] = [];
     for (const model of chain) {
@@ -101,11 +103,18 @@ export class ModelRouter {
       } catch (err) {
         logger.warn(`Model ${model} failed, trying next in chain`, {
           error: (err as Error).message,
+          category: err instanceof AppError ? err.category : undefined,
         });
       }
     }
-    // Inform the user that no completion could be generated.
-    const error = new Error('No models can be used to generate a completion. Please check your API keys and model availability or wait for usage to be available.');
+    // Inform the user that no completion could be generated. Not retryable here — the fallback
+    // chain has already been exhausted, retrying this same call would repeat the same failures.
+    const error = new AppError(
+      'No models can be used to generate a completion. Please check your API keys and model availability or wait for usage to be available.',
+      ErrorCategory.LLM_PROVIDER,
+      false,
+      'No LLM provider is currently available. Please check your API keys and try again.',
+    );
     callbacks.onError(error);
     throw error;
   }
@@ -119,7 +128,7 @@ export class ModelRouter {
   ): Promise<void> {
     const provider = this.registry.getProviderForModel(model);
     if (!provider) {
-      throw new Error(`Unknown model provider for: ${model}`);
+      throw new AppError(`Unknown model provider for: ${model}`, ErrorCategory.LLM_PROVIDER, false, `Model "${model}" is not recognized by any configured provider.`);
     }
     await provider.streamCompletion(model, systemPrompt, messages, callbacks);
   }
@@ -131,7 +140,7 @@ export class ModelRouter {
   ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
     const provider = this.registry.getProviderForModel(model);
     if (!provider || !provider.generateNonStreaming) {
-      throw new Error(`Unsupported model for generation: ${model}`);
+      throw new AppError(`Unsupported model for generation: ${model}`, ErrorCategory.LLM_PROVIDER, false, `Model "${model}" does not support this operation.`);
     }
     return provider.generateNonStreaming(model, systemPrompt, messages);
   }
