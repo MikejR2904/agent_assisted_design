@@ -7,6 +7,8 @@ import { workspaceRouter } from './routes/workspace.routes';
 import { sessionsRouter } from './routes/sessions.routes';
 import { projectsRouter } from './routes/projects.routes';
 import { summaryRouter } from './routes/summary.routes';
+import { modelsRouter } from './routes/models.routes';
+import { providersRouter } from './routes/providers.routes';
 import { TelemetryService } from './services/TelemetryService';
 import { logger } from './utils/logger';
 import path from 'path';
@@ -44,6 +46,8 @@ export function createApp(orchestrator?: Orchestrator): express.Application {
   app.use('/api/sessions', sessionsRouter(sessionService));
   app.use('/api/projects', projectsRouter(projectService));
   app.use('/api/agents/summary', summaryRouter());
+  app.use('/api/models', modelsRouter());
+  app.use('/api/providers', providersRouter());
 
   // Workspace routes (require orchestrator)
   if (orchestrator) {

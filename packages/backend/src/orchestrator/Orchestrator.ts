@@ -52,7 +52,7 @@ export class Orchestrator {
     private readonly workspaceRoot: string,
     private readonly baselineDir: string,
   ) {
-    this.modelRouter = new ModelRouter();
+    this.modelRouter = ModelRouter.getInstance();
     this.agentFactory = new AgentFactory(this.modelRouter, this.configService, this.telemetryService);
   }
 

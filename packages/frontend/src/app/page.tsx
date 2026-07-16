@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
   RefreshCw, ChevronDown,
-  LayoutPanelLeft, MessageSquare, Code2, Users,
+  LayoutPanelLeft, MessageSquare, Code2, Users, Plug,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { GateStepper } from '@/components/panels/GateStepper';
@@ -18,6 +18,7 @@ import { FileExplorer } from '@/components/sidebar/FileExplorer';
 import { ProjectSidebar } from '@/components/sidebar/ProjectSidebar';
 import { AgentList } from '@/components/sidebar/AgentList';
 import { AgentManager } from '@/components/AgentManager';
+import { ProviderManager } from '@/components/ProviderManager';
 import { MonacoEditor } from '@/components/editor/MonacoEditor';
 import { useAgentStore } from '@/lib/stores/agentStore';
 import { useConfigStore } from '@/lib/stores/configStore';
@@ -41,6 +42,7 @@ export default function WorkbenchPage() {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files');
   const [rightTab, setRightTab] = useState<RightTab>('telemetry');
   const [showAgentManager, setShowAgentManager] = useState(false);
+  const [showProviderManager, setShowProviderManager] = useState(false);
   const [showConditionMenu, setShowConditionMenu] = useState(false);
   const [selectedFile, setSelectedFile] = useState<{ path: string; content: string; locked: boolean } | null>(null);
   const [loadingFile, setLoadingFile] = useState(false);
@@ -183,8 +185,20 @@ export default function WorkbenchPage() {
           </button> */}
         </div>
 
-        {/* Right: manage agents */}
+        {/* Right: manage agents / providers */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowProviderManager(!showProviderManager)}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono transition-colors',
+              showProviderManager
+                ? 'bg-accent/20 text-accent border border-accent/30'
+                : 'text-gray-500 hover:text-gray-300 border border-surface-overlay',
+            )}
+          >
+            <Plug size={12} />
+            Providers
+          </button>
           <button
             onClick={() => setShowAgentManager(!showAgentManager)}
             className={clsx(
@@ -321,6 +335,32 @@ export default function WorkbenchPage() {
             </div>
             <div className="flex-1 overflow-hidden">
               <AgentManager />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Provider Manager overlay ──────────────────────────────────────── */}
+      {showProviderManager && (
+        <div className="fixed inset-0 z-40 flex">
+          {/* Backdrop */}
+          <div
+            className="flex-1 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowProviderManager(false)}
+          />
+          {/* Panel slides in from right */}
+          <div className="w-[720px] flex flex-col border-l border-surface-overlay bg-surface-raised shadow-2xl">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-surface-overlay">
+              <span className="text-sm font-mono text-gray-300">Provider Registry</span>
+              <button
+                onClick={() => setShowProviderManager(false)}
+                className="text-gray-600 hover:text-white transition-colors text-xs font-mono"
+              >
+                Close ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <ProviderManager />
             </div>
           </div>
         </div>

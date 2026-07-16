@@ -52,7 +52,10 @@ export const BaseModelSchema = z.enum([
   // ...
 ]);
 
-export type BaseModel = z.infer<typeof BaseModelSchema>;
+// BaseModelSchema above is kept as a legacy/reference list of known model IDs, but is no longer
+// used to validate agent configs — models are now sourced from the provider registry
+// (config/providers.json + built-in defaults), so any non-empty string is a valid model ID.
+export type BaseModel = string;
 
 // Define the schema for supported agent tools - TO BE ADDED AS WE TEST MORE TOOLS
 // Agent tools are defined in TOOL_DEFINITIONS.md and must be kept in sync with that file
@@ -87,7 +90,7 @@ export const AgentConfigSchema = z.object({
   name: z.string().min(1).max(50),
   roleDescription: z.string().min(1).max(500),
   skillFile: z.string().optional(), // path to SKILL.md
-  baseModel: BaseModelSchema,
+  baseModel: z.string().min(1),
   apiKey: z.string().optional(), // if overriding global key in .env, this will be encrypted and decrypted
   permissionLevel: ToolPermissionSchema,
   assignedTools: z.array(AgentToolSchema),

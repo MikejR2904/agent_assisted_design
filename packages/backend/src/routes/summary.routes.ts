@@ -15,7 +15,7 @@ const SummaryRequestSchema = z.object({
 
 export function summaryRouter(): Router {
   const router = Router();
-  const modelRouter = new ModelRouter();
+  const modelRouter = ModelRouter.getInstance();
   router.post('/', async (req, res) => {
     const parsed = SummaryRequestSchema.safeParse(req.body);
     if (!parsed.success) {

@@ -1,4 +1,4 @@
-import type { AgentConfig, Project, ProjectCreate, AgentSummary, Attachment } from '@agent_design/shared/types';
+import type { AgentConfig, Project, ProjectCreate, AgentSummary, Attachment, ProviderStatus, ProviderConfig, CostTier } from '@agent_design/shared/types';
 
 const BASE = '/api';
 
@@ -26,6 +26,46 @@ export const agentsApi = {
 
   remove: (id: string): Promise<void> =>
     request(`/agents/${id}`, { method: 'DELETE' }),
+};
+
+// Models (LLM provider registry)
+export interface ModelEntry {
+  id: string;
+  providerId: string;
+  providerName: string;
+  costTier: CostTier;
+  available: boolean;
+}
+
+export const modelsApi = {
+  list: (): Promise<{ models: ModelEntry[] }> => request('/models'),
+
+  providers: (): Promise<{ providers: ProviderStatus[] }> => request('/models/providers'),
+};
+
+// Providers (LLM router provider registry management)
+export interface ProviderFormData extends Omit<ProviderConfig, 'apiKeyEncoded'> {
+  apiKey?: string;
+}
+
+export interface ProvidersState {
+  effective: ProviderStatus[];
+  custom: Omit<ProviderConfig, 'apiKeyEncoded'>[];
+  defaults: Omit<ProviderConfig, 'apiKeyEncoded'>[];
+  defaultIds: string[];
+}
+
+export const providersApi = {
+  list: (): Promise<ProvidersState> => request('/providers'),
+
+  create: (data: Partial<ProviderFormData>): Promise<ProvidersState> =>
+    request('/providers', { method: 'POST', body: JSON.stringify(data) }),
+
+  update: (id: string, data: Partial<ProviderFormData>): Promise<ProvidersState> =>
+    request(`/providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  remove: (id: string): Promise<ProvidersState> =>
+    request(`/providers/${id}`, { method: 'DELETE' }),
 };
 
 // Files 

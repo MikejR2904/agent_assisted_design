@@ -1,13 +1,14 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, Edit2, Trash2, X, Save, ChevronDown, Brain,
   Shield, Zap, AlertOctagon, CheckCircle, Clock, XCircle,
 } from 'lucide-react';
 import { useAgentStore, getDecodedApiKey } from '@/lib/stores/agentStore';
-import type { AgentConfig, AgentTool, BaseModel } from '@agent_design/shared/types';
-import { BaseModelSchema } from '@agent_design/shared/types';
+import type { AgentConfig, AgentTool, BaseModel, CostTier } from '@agent_design/shared/types';
+import { modelsApi, type ModelEntry } from '@/lib/api/client';
+import { Field, inputCls } from '@/components/forms/FormField';
 import { clsx } from 'clsx';
 
 // Types
@@ -27,7 +28,7 @@ interface AgentFormState {
 const DEFAULT_FORM: AgentFormState = {
   name: '',
   roleDescription: '',
-  baseModel: 'claude-3-5-sonnet-20241022',
+  baseModel: '',
   apiKey: '',
   permissionLevel: 'ask-user',
   assignedTools: ['read_file', 'write_rtl'],
@@ -46,42 +47,21 @@ const ALL_TOOLS: AgentTool[] = [
   'list_files',
 ];
 
-const MODEL_OPTIONS: { value: string; label: string }[] = BaseModelSchema.options.map((value) => {
-  // Format: remove hyphens, capitalize words
-  let label = value.replace(/-/g, ' ');
-  label = label.replace(/\b\w/g, l => l.toUpperCase());
-
-  // Human-readable overrides
-  const overrides: Record<string, string> = {
-    'Claude 3 5 Sonnet 20241022': 'Claude 3.5 Sonnet',
-    'Claude 3 Haiku 20240307': 'Claude 3 Haiku',
-    'Claude 3 Opus 20240229': 'Claude 3 Opus',
-    'Claude Opus 4 8': 'Claude Opus 4.8',
-    'Claude Sonnet 4 5': 'Claude Sonnet 4.5',
-    'Gpt 4o': 'GPT-4o',
-    'Gpt 4o Mini': 'GPT-4o Mini',
-    'Gpt 4 Turbo': 'GPT-4 Turbo',
-    'Gpt 3 5 Turbo': 'GPT-3.5 Turbo',
-    'Gemini 3 1 Pro': 'Gemini 3.1 Pro',
-    'Gemini 3 5 Flash': 'Gemini 3.5 Flash',
-    'Gemini 3 1 Ultra': 'Gemini 3.1 Ultra',
-    'Llama3 70b 8192': 'Llama 3 70B (Groq)',
-    'Mixtral 8x7b 32768': 'Mixtral 8x7B (Groq)',
-    'Ollama/Llama3': 'Ollama Llama 3 (Local)',
-    'Ollama/Codellama': 'Ollama CodeLlama (Local)',
-    'Deepseek Coder': 'DeepSeek Coder',
-    'Deepseek Chat': 'DeepSeek Chat',
-    'Mistral 7b': 'Mistral 7B',
-    'Mixtral 8x22b': 'Mixtral 8x22B',
-    'Falcon 180b': 'Falcon 180B',
-    'Phi 3 Mini': 'Phi-3 Mini',
-    'Phi 3 Medium': 'Phi-3 Medium',
-    'Chatgpt 5 5': 'ChatGPT 5.5',
-  };
-  return { value, label: overrides[label] || label };
-});
-
 // Helpers
+
+const COST_TIER_META: Record<CostTier, { label: string; classes: string }> = {
+  free: { label: 'Free', classes: 'bg-success/15 text-success border-success/30' },
+  low: { label: 'Low', classes: 'bg-accent/15 text-accent border-accent/30' },
+  medium: { label: 'Medium', classes: 'bg-warning/15 text-warning border-warning/30' },
+  high: { label: 'High', classes: 'bg-error/15 text-error border-error/30' },
+  premium: { label: 'Premium', classes: 'bg-error/15 text-error border-error/30' },
+  mixed: { label: 'Mixed', classes: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
+};
+
+const AVAILABILITY_META: Record<'available' | 'unavailable', { label: string; classes: string }> = {
+  available: { label: 'Ready', classes: 'bg-success/15 text-success border-success/30' },
+  unavailable: { label: 'Needs API Key', classes: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
+};
 
 const PERMISSION_META: Record<PermissionLevel, { label: string; icon: React.ReactNode; classes: string }> = {
   'auto-execute': {
@@ -109,11 +89,6 @@ const STATUS_META: Record<AgentConfig['status'], { icon: React.ReactNode; classe
   error:              { icon: <XCircle size={11} />,        classes: 'text-error' },
 };
 
-function isFreeModel(model: string): boolean {
-  return model.includes('groq') || model.includes('ollama') ||
-    model.includes('gemini-3.5-flash') || model.includes('mixtral');
-}
-
 // Component
 
 export function AgentManager() {
@@ -124,11 +99,34 @@ export function AgentManager() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelEntry[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+
+  useEffect(() => {
+    modelsApi.list()
+      .then((res) => setModels(res.models))
+      .catch(() => setModels([]))
+      .finally(() => setModelsLoading(false));
+  }, []);
+
+  const findModel = (id: string): ModelEntry | undefined => models.find((m) => m.id === id);
+  const isFreeModel = (id: string): boolean => findModel(id)?.costTier === 'free';
+
+  const modelsByProvider = useMemo(() => {
+    const groups = new Map<string, ModelEntry[]>();
+    for (const model of models) {
+      const group = groups.get(model.providerName) ?? [];
+      group.push(model);
+      groups.set(model.providerName, group);
+    }
+    return groups;
+  }, [models]);
 
   // Form helpers
 
   const openCreate = () => {
-    setForm(DEFAULT_FORM);
+    const defaultModel = models.find((m) => m.id === 'claude-3-5-sonnet-20241022')?.id ?? models[0]?.id ?? '';
+    setForm({ ...DEFAULT_FORM, baseModel: defaultModel });
     setEditingId(null);
     setSaveError(null);
     setIsModalOpen(true);
@@ -245,8 +243,10 @@ export function AgentManager() {
                       <p className="text-gray-200 font-medium">{agent.name}</p>
                       <p className="text-gray-500 text-[10px] truncate max-w-[160px]">{agent.roleDescription}</p>
                     </td>
-                    <td className="px-4 py-2.5 text-gray-400 text-[10px] max-w-[120px] truncate">
-                      {MODEL_OPTIONS.find((m) => m.value === agent.baseModel)?.label ?? agent.baseModel}
+                    <td className="px-4 py-2.5 text-gray-400 text-[10px] max-w-[120px] truncate" title={agent.baseModel}>
+                      {findModel(agent.baseModel)?.providerName
+                        ? `${findModel(agent.baseModel)!.providerName}: ${agent.baseModel}`
+                        : agent.baseModel}
                     </td>
                     <td className="px-4 py-2.5">
                       {agent.apiKey ? (
@@ -365,13 +365,40 @@ export function AgentManager() {
                     value={form.baseModel}
                     onChange={(e) => setForm({ ...form, baseModel: e.target.value as BaseModel })}
                     className={clsx(inputCls, 'appearance-none pr-8')}
+                    required
                   >
-                    {MODEL_OPTIONS.map((m) => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
+                    {!form.baseModel && (
+                      <option value="" disabled>
+                        {modelsLoading ? 'Loading models…' : 'Select a model…'}
+                      </option>
+                    )}
+                    {form.baseModel && !findModel(form.baseModel) && (
+                      <option value={form.baseModel}>{form.baseModel} (unavailable)</option>
+                    )}
+                    {Array.from(modelsByProvider.entries()).map(([providerName, providerModels]) => (
+                      <optgroup key={providerName} label={providerName}>
+                        {providerModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.id}{!m.available && ' — needs API key'}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                   <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
                 </div>
+                {form.baseModel && findModel(form.baseModel) && (
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className={clsx('inline-flex items-center w-fit px-2 py-0.5 rounded border text-[10px]',
+                      COST_TIER_META[findModel(form.baseModel)!.costTier].classes)}>
+                      {COST_TIER_META[findModel(form.baseModel)!.costTier].label}
+                    </span>
+                    <span className={clsx('inline-flex items-center w-fit px-2 py-0.5 rounded border text-[10px]',
+                      AVAILABILITY_META[findModel(form.baseModel)!.available ? 'available' : 'unavailable'].classes)}>
+                      {AVAILABILITY_META[findModel(form.baseModel)!.available ? 'available' : 'unavailable'].label}
+                    </span>
+                  </div>
+                )}
               </Field>
 
               {/* API Key */}
@@ -500,34 +527,6 @@ export function AgentManager() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-const inputCls =
-  'w-full bg-surface border border-surface-overlay text-gray-200 text-xs font-mono px-3 py-2 rounded focus:outline-none focus:border-accent/60 placeholder:text-gray-600 transition-colors';
-
-function Field({
-  label,
-  hint,
-  required,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label className="block text-xs font-mono text-gray-400">
-        {label}
-        {required && <span className="text-error ml-1">*</span>}
-      </label>
-      {children}
-      {hint && <p className="text-[10px] text-gray-600 font-mono">{hint}</p>}
     </div>
   );
 }

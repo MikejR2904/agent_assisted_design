@@ -1,6 +1,6 @@
 # We'll create .env.example/ and config/ examples once this project is concluded
 .env
-config/
+/config/
 
 # Build artefacts and lock files
 node_modules/
