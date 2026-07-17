@@ -9,6 +9,8 @@ const STATUS_BY_CATEGORY: Record<ErrorCategory, number> = {
   [ErrorCategory.NETWORK]: 502,
   [ErrorCategory.TOOL_EXECUTION]: 500,
   [ErrorCategory.CONFIG]: 500,
+  [ErrorCategory.AUTHENTICATION]: 401,
+  [ErrorCategory.AUTHORIZATION]: 403,
 };
 
 // Global Express error handler. Most routes still catch their own errors and respond inline

@@ -1,7 +1,6 @@
 import { ExperimentalCondition } from '@agent_design/shared';
-import fs from 'fs/promises';
-import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { SessionRepository } from '../db/repositories/SessionRepository';
 
 export interface Session {
   id: string;
@@ -22,32 +21,24 @@ export interface Message {
   timestamp: string;
 }
 
+// Backed by SQLite (via SessionRepository) instead of whole-file JSON reads/writes. Public
+// method signatures are unchanged from the file-based version, so route callers didn't need to
+// change.
 export class SessionService {
-  private sessionsFile: string;
-  private messagesDir: string;
+  private repo = new SessionRepository();
 
-  constructor(telemetryRoot: string) {
-    this.sessionsFile = path.join(telemetryRoot, 'sessions.json');
-    this.messagesDir = path.join(telemetryRoot, 'messages');
-  }
+  // telemetryRoot is no longer used directly here (the repository resolves the DB path via
+  // ConfigManager) — kept as a constructor param for call-site compatibility.
+  constructor(_telemetryRoot: string) {}
 
-  async readSessions(): Promise<Session[]> {
-    try {
-      const data = await fs.readFile(this.sessionsFile, 'utf-8');
-      return JSON.parse(data);
-    } catch {
-      return [];
-    }
-  }
-
-  private async writeSessions(sessions: Session[]): Promise<void> {
-    await fs.mkdir(path.dirname(this.sessionsFile), { recursive: true });
-    await fs.writeFile(this.sessionsFile, JSON.stringify(sessions, null, 2));
+  // ownerId set -> only that user's sessions plus pre-existing unowned ones. Unset (no
+  // authenticated caller, or an admin) -> unfiltered, matching pre-auth behavior.
+  async readSessions(ownerId?: string): Promise<Session[]> {
+    return this.repo.findAll(ownerId ? { userId: ownerId } : undefined);
   }
 
   async getSession(id: string): Promise<Session | null> {
-    const sessions = await this.readSessions();
-    return sessions.find(s => s.id === id) || null;
+    return this.repo.findById(id);
   }
 
   async createSession(
@@ -55,76 +46,49 @@ export class SessionService {
     condition: ExperimentalCondition,
     agentIds: string[],
     title?: string,
-    projectId?: string
+    projectId?: string,
+    ownerId?: string,
   ): Promise<Session> {
     const now = new Date().toISOString();
-    const session: Session = {
+    const existing = this.repo.findById(id);
+    const session: Omit<Session, 'messages'> = {
       id,
       condition,
-      title: title || `New chat (${condition})`,
-      createdAt: now,
+      title: title || existing?.title || `New chat (${condition})`,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       agentIds,
       projectId,
-      messages: [],
     };
-    const sessions = await this.readSessions();
-    // Avoid duplicates (if the session already exists, update it)
-    const idx = sessions.findIndex(s => s.id === id);
-    if (idx >= 0) {
-      sessions[idx] = session;
-    } else {
-      sessions.unshift(session);
-    }
-    await this.writeSessions(sessions);
-    await fs.mkdir(path.join(this.messagesDir, id), { recursive: true });
-    return session;
+    this.repo.upsert(session, ownerId);
+    return { ...session, messages: existing?.messages ?? [] };
   }
 
   async updateSessionTitle(id: string, title: string): Promise<void> {
-    const sessions = await this.readSessions();
-    const idx = sessions.findIndex(s => s.id === id);
-    if (idx === -1) return;
-    sessions[idx].title = title;
-    sessions[idx].updatedAt = new Date().toISOString();
-    await this.writeSessions(sessions);
+    if (!this.repo.exists(id)) return;
+    this.repo.updateTitle(id, title, new Date().toISOString());
   }
 
   async addMessage(sessionId: string, message: Omit<Message, 'id'>): Promise<Message> {
-    const msg: Message = { ...message, id: uuidv4() };
-    // Append to session's messages array
-    const sessions = await this.readSessions();
-    const idx = sessions.findIndex(s => s.id === sessionId);
-    if (idx === -1) {
+    if (!this.repo.exists(sessionId)) {
       throw new Error(`Session ${sessionId} not found`);
     }
-    sessions[idx].messages.push(msg);
-    sessions[idx].updatedAt = new Date().toISOString();
-    // Also persist to a daily JSONL file for telemetry (optional)
-    const filePath = path.join(this.messagesDir, sessionId, `${msg.timestamp.split('T')[0]}.jsonl`);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.appendFile(filePath, JSON.stringify(msg) + '\n');
-    await this.writeSessions(sessions);
+    const msg: Message = { ...message, id: uuidv4() };
+    this.repo.addMessage(sessionId, msg, new Date().toISOString());
     return msg;
   }
 
   async getMessages(sessionId: string): Promise<Message[]> {
-    const session = await this.getSession(sessionId);
+    const session = this.repo.findById(sessionId);
     return session ? session.messages : [];
   }
 
   async deleteSession(id: string): Promise<void> {
-    const sessions = await this.readSessions();
-    const filtered = sessions.filter(s => s.id !== id);
-    await this.writeSessions(filtered);
-    await fs.rm(path.join(this.messagesDir, id), { recursive: true, force: true });
+    this.repo.deleteById(id);
   }
 
   async linkToProject(sessionId: string, projectId: string): Promise<void> {
-    const sessions = await this.readSessions();
-    const idx = sessions.findIndex(s => s.id === sessionId);
-    if (idx === -1) return;
-    sessions[idx].projectId = projectId;
-    await this.writeSessions(sessions);
+    if (!this.repo.exists(sessionId)) return;
+    this.repo.setProjectId(sessionId, projectId, new Date().toISOString());
   }
 }

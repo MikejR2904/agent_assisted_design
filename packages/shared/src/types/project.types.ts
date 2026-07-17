@@ -23,3 +23,10 @@ export const ProjectCreateSchema = ProjectSchema.pick({
   condition: true,
 }).partial({ condition: true });
 export type ProjectCreate = z.infer<typeof ProjectCreateSchema>;
+
+// id/createdAt/workspaceDir/sessionIds aren't updatable via the API (workspaceDir is set once at
+// creation; sessionIds is now derived from the sessions table, not a client-writable field).
+export const ProjectUpdateSchema = ProjectSchema
+  .omit({ id: true, createdAt: true, workspaceDir: true, sessionIds: true })
+  .partial();
+export type ProjectUpdate = z.infer<typeof ProjectUpdateSchema>;

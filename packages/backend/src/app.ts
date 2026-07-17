@@ -10,6 +10,7 @@ import { summaryRouter } from './routes/summary.routes';
 import { modelsRouter } from './routes/models.routes';
 import { providersRouter } from './routes/providers.routes';
 import { ragRouter } from './routes/rag.routes';
+import { authRouter } from './routes/auth.routes';
 import { TelemetryService } from './services/TelemetryService';
 import path from 'path';
 import type { Orchestrator } from './orchestrator/Orchestrator';
@@ -52,6 +53,7 @@ export function createApp(orchestrator?: Orchestrator): express.Application {
   app.use('/api/models', modelsRouter());
   app.use('/api/providers', providersRouter());
   app.use('/api/rag', ragRouter());
+  app.use('/api/auth', authRouter());
 
   // Workspace routes (require orchestrator)
   if (orchestrator) {

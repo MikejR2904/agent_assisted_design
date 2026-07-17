@@ -1,8 +1,10 @@
 'use client';
 
-import { Activity, Cpu, Zap, Download, AlertCircle, Gauge } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Activity, Cpu, Zap, Download, AlertCircle, Gauge, FlaskConical } from 'lucide-react';
 import { useTelemetryStore } from '../../lib/stores/telemetryStore';
 import { useAgentStore } from '../../lib/stores/agentStore';
+import { telemetryApi, type ExperimentMetrics } from '../../lib/api/client';
 import { clsx } from 'clsx';
 
 const statusColors = {
@@ -22,8 +24,19 @@ const statusDots = {
 export function TelemetryPanel() {
   const { metrics, edaStatus, tokensByAgent, currentGate, condition, sessionId, latestPPA } = useTelemetryStore();
   const { agents } = useAgentStore();
+  const [experimentMetrics, setExperimentMetrics] = useState<ExperimentMetrics | null>(null);
 
   const activeAgents = agents.filter((a) => a.status === 'thinking' || a.status === 'awaiting-approval');
+
+  // Fetch-on-demand (not live-streamed) — HCR/FPAR/PPA-drift are computed queries over the full
+  // event log, re-fetched whenever the active session or its metrics change.
+  useEffect(() => {
+    if (!sessionId) {
+      setExperimentMetrics(null);
+      return;
+    }
+    telemetryApi.experimentMetrics(sessionId).then(setExperimentMetrics).catch(() => setExperimentMetrics(null));
+  }, [sessionId, metrics]);
 
   const downloadTelemetry = () => {
     if (!sessionId || !condition) return;
@@ -112,6 +125,46 @@ export function TelemetryPanel() {
             <StatRow label="TNS" value={`${latestPPA.tns} ns`} color={latestPPA.tns < 0 ? 'text-error' : 'text-success'} />
             {latestPPA.cells !== undefined && <StatRow label="Cells" value={latestPPA.cells.toLocaleString()} />}
             {latestPPA.nets !== undefined && <StatRow label="Nets" value={latestPPA.nets.toLocaleString()} />}
+          </div>
+        </Section>
+      )}
+
+      {/* Experiment Metrics (thesis: HCR, FPAR, PPA drift) */}
+      {experimentMetrics && (experimentMetrics.humanCorrectionRate !== null || experimentMetrics.firstPassAcceptanceRate !== null || experimentMetrics.ppaDrift.length > 0) && (
+        <Section title="Experiment Metrics" icon={<FlaskConical size={12} />}>
+          <div className="space-y-2">
+            {experimentMetrics.humanCorrectionRate !== null && (
+              <StatRow
+                label="Human Correction Rate"
+                value={`${(experimentMetrics.humanCorrectionRate * 100).toFixed(0)}%`}
+                color={experimentMetrics.humanCorrectionRate > 0.3 ? 'text-error' : 'text-gray-300'}
+              />
+            )}
+            {experimentMetrics.firstPassAcceptanceRate !== null && (
+              <StatRow
+                label="First-Pass Acceptance"
+                value={`${(experimentMetrics.firstPassAcceptanceRate * 100).toFixed(0)}%`}
+                color={experimentMetrics.firstPassAcceptanceRate < 0.5 ? 'text-warning' : 'text-success'}
+              />
+            )}
+            {experimentMetrics.ppaDrift.length > 0 && (() => {
+              const latest = experimentMetrics.ppaDrift[experimentMetrics.ppaDrift.length - 1];
+              return (
+                <>
+                  <StatRow label="PPA Runs Compared" value={experimentMetrics.ppaDrift.length + 1} />
+                  <StatRow
+                    label="Latest Δ Area"
+                    value={`${latest.deltaArea >= 0 ? '+' : ''}${latest.deltaArea.toLocaleString()} µm²`}
+                    color={latest.deltaArea > 0 ? 'text-error' : 'text-success'}
+                  />
+                  <StatRow
+                    label="Latest Δ WNS"
+                    value={`${latest.deltaWns >= 0 ? '+' : ''}${latest.deltaWns} ns`}
+                    color={latest.deltaWns < 0 ? 'text-error' : 'text-success'}
+                  />
+                </>
+              );
+            })()}
           </div>
         </Section>
       )}

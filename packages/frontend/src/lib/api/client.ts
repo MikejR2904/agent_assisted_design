@@ -1,4 +1,4 @@
-import type { AgentConfig, Project, ProjectCreate, AgentSummary, Attachment, ProviderStatus, ProviderConfig, CostTier } from '@agent_design/shared/types';
+import type { AgentConfig, Project, ProjectCreate, AgentSummary, Attachment, ProviderStatus, ProviderConfig, CostTier, PPAMetrics } from '@agent_design/shared/types';
 
 const BASE = '/api';
 
@@ -109,12 +109,31 @@ export const filesApi = {
 };
 
 // Telemetry
+export interface ExperimentMetrics {
+  sessionId: string;
+  humanCorrectionRate: number | null;
+  firstPassAcceptanceRate: number | null;
+  ppaDrift: Array<{
+    from: PPAMetrics;
+    to: PPAMetrics;
+    fromTimestamp: string;
+    toTimestamp: string;
+    deltaArea: number;
+    deltaPower: number;
+    deltaFrequency: number;
+    deltaWns: number;
+  }>;
+}
+
 export const telemetryApi = {
   session: (sessionId: string) => request(`/telemetry/session/${sessionId}`),
 
   logs: (): Promise<string[]> => request('/telemetry/logs'),
 
   downloadUrl: (filename: string): string => `${BASE}/telemetry/logs/${filename}`,
+
+  experimentMetrics: (sessionId: string): Promise<ExperimentMetrics> =>
+    request(`/telemetry/experiment/${sessionId}/metrics`),
 };
 
 // Project

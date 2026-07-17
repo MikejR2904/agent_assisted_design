@@ -1,12 +1,15 @@
-import fs from 'fs/promises';
-import path from 'path';
 import type { TelemetryEvent, SessionMetrics, ExperimentalCondition } from '@agent_design/shared/types';
+import { TelemetryRepository, type ExperimentMetrics } from '../db/repositories/TelemetryRepository';
 import { logger } from '../utils/logger';
 
+// Backed by SQLite (via TelemetryRepository) instead of an in-memory Map + append-only JSONL
+// file per session. Public method signatures are unchanged. The in-memory
+// Map<sessionId, SessionMetrics> and open-file-handle Map from the old version are gone —
+// getSessionMetrics() now recomputes from durable storage every call, so a server restart no
+// longer loses metrics (the "state loss on restart" risk this migration set out to fix).
 export class TelemetryService {
   private static instance: TelemetryService;
-  private sessions = new Map<string, SessionMetrics>();
-  private fileHandles = new Map<string, fs.FileHandle>();
+  private repo = new TelemetryRepository();
 
   private constructor(private readonly telemetryRoot: string) {}
 
@@ -22,33 +25,6 @@ export class TelemetryService {
     condition: ExperimentalCondition,
     agentIds: string[],
   ): Promise<void> {
-    const metrics: SessionMetrics = {
-      sessionId,
-      condition,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalTokens: 0,
-      totalAttempts: 0,
-      humanApprovals: 0,
-      humanDenials: 0,
-      humanModifications: 0,
-      toolExecutions: 0,
-      toolFailures: 0,
-      gatesCompleted: [],
-      durationMs: 0,
-    };
-    this.sessions.set(sessionId, metrics);
-
-    // Open JSONL file
-    const logPath = path.join(
-      this.telemetryRoot,
-      'experiments',
-      `${condition}_${sessionId}.jsonl`,
-    );
-    await fs.mkdir(path.dirname(logPath), { recursive: true });
-    const handle = await fs.open(logPath, 'a');
-    this.fileHandles.set(sessionId, handle);
-
     await this.log({
       type: 'session_start',
       sessionId,
@@ -56,59 +32,35 @@ export class TelemetryService {
       condition,
       agentIds,
     });
-
     logger.info('Session started', { sessionId, condition });
   }
 
   async log(event: TelemetryEvent): Promise<void> {
-    const { sessionId } = event as { sessionId: string };
-    const handle = this.fileHandles.get(sessionId);
-    if (handle) {
-      await handle.write(JSON.stringify(event) + '\n');
-    }
-
-    // Update in-memory metrics
-    const metrics = this.sessions.get(sessionId);
-    if (!metrics) return;
-
-    switch (event.type) {
-      case 'response_received':
-        metrics.totalInputTokens += event.inputTokens ?? 0;
-        metrics.totalOutputTokens += event.outputTokens ?? 0;
-        metrics.totalTokens += event.totalTokens ?? 0;
-        break;
-      case 'tool_request':
-        metrics.totalAttempts++;
-        metrics.toolExecutions++;
-        break;
-      case 'tool_result':
-        if (!event.success) metrics.toolFailures++;
-        break;
-      case 'human_action':
-        if (event.action === 'approved') metrics.humanApprovals++;
-        else if (event.action === 'denied') metrics.humanDenials++;
-        else if (event.action === 'modified') metrics.humanModifications++;
-        break;
-      case 'gate_transition':
-        if (!metrics.gatesCompleted.includes(event.toGate)) {
-          metrics.gatesCompleted.push(event.toGate);
-        }
-        break;
-      case 'ppa_metrics':
-        metrics.latestPPA = event.metrics;
-        break;
-    }
+    this.repo.insert(event);
   }
 
   getSessionMetrics(sessionId: string): SessionMetrics | null {
-    return this.sessions.get(sessionId) ?? null;
+    return this.repo.getSessionMetrics(sessionId);
+  }
+
+  // New: thesis metrics (HCR, FPAR, PPA drift) computed from the event log.
+  getExperimentMetrics(sessionId: string): ExperimentMetrics {
+    return this.repo.getExperimentMetrics(sessionId);
+  }
+
+  // Used by telemetry.routes.ts's log-download endpoints, which used to read JSONL files
+  // directly off disk — now reconstructed from the DB (see TelemetryRepository).
+  getEventsForSession(sessionId: string): TelemetryEvent[] {
+    return this.repo.getEventsForSession(sessionId);
+  }
+
+  listSessionLogFiles(): string[] {
+    return this.repo.listSessionLogFiles();
   }
 
   async closeSession(sessionId: string, durationMs: number): Promise<void> {
-    const metrics = this.sessions.get(sessionId);
+    const metrics = this.repo.getSessionMetrics(sessionId);
     if (!metrics) return;
-
-    metrics.durationMs = durationMs;
 
     await this.log({
       type: 'session_end',
@@ -120,9 +72,6 @@ export class TelemetryService {
       durationMs,
     });
 
-    const handle = this.fileHandles.get(sessionId);
-    await handle?.close();
-    this.fileHandles.delete(sessionId);
     logger.info('Session closed', { sessionId, durationMs });
   }
 }

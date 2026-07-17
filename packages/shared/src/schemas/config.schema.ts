@@ -65,6 +65,14 @@ export const AppConfigSchema = z.object({
     chunkOverlap: z.number().int().min(0).default(150),
     topK: z.number().int().min(1).default(5),
   }).default({}),
+
+  // JWT auth. jwtSecret is intentionally optional with no static default — ConfigManager
+  // generates a random one at boot (logged as a warning) when unset, rather than shipping a
+  // predictable fallback secret.
+  auth: z.object({
+    jwtSecret: z.string().optional(),
+    tokenExpiryMinutes: z.number().int().min(1).default(60),
+  }).default({}),
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;

@@ -66,7 +66,7 @@ importers:
     dependencies:
       '@azure/core-auth':
         specifier: ^1.5.0
-        version: 1.10.1
+        version: 1.10.1(supports-color@5.5.0)
       '@microsoft/kiota-abstractions':
         specifier: ^1.0.0-preview.103
         version: 1.0.0-preview.103
@@ -222,6 +222,9 @@ importers:
       '@qdrant/js-client-rest':
         specifier: ^1.18.0
         version: 1.18.0(typescript@5.9.3)
+      bcryptjs:
+        specifier: ^3.0.3
+        version: 3.0.3
       better-sqlite3:
         specifier: ^9.6.0
         version: 9.6.0
@@ -240,6 +243,9 @@ importers:
       groq-sdk:
         specifier: ^0.5.0
         version: 0.5.0
+      jsonwebtoken:
+        specifier: ^9.0.3
+        version: 9.0.3
       multer:
         specifier: ^1.4.5-lts.1
         version: 1.4.5-lts.2
@@ -277,6 +283,9 @@ importers:
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
+      '@types/jsonwebtoken':
+        specifier: ^9.0.10
+        version: 9.0.10
       '@types/multer':
         specifier: ^1.4.11
         version: 1.4.13
@@ -1460,6 +1469,9 @@ packages:
   '@types/json5@0.0.29':
     resolution: {integrity: sha512-dRLjCWHYg4oaA77cxO64oO+7JwCwnIzkZPdrrC71jQmQtlhM556pwKo5bUzqvZndkVbeFLIIi+9TC40JNF5hNQ==}
 
+  '@types/jsonwebtoken@9.0.10':
+    resolution: {integrity: sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA==}
+
   '@types/lodash@4.14.117':
     resolution: {integrity: sha512-xyf2m6tRbz8qQKcxYZa7PA4SllYcay+eh25DN3jmNYY6gSTL7Htc/bttVdkqj2wfJGbeWlQiX8pIyJpKU+tubw==}
 
@@ -1922,6 +1934,10 @@ packages:
   baseline-browser-mapping@2.10.38:
     resolution: {integrity: sha512-31/02mVB4yuQU6adKk5SlY6m+mxDwUq5KZkyYgnLrrKl7TEm1+3PyDtDBz2kOv/wxZz41GHsvV1A/u6RmiyBvw==}
     engines: {node: '>=6.0.0'}
+    hasBin: true
+
+  bcryptjs@3.0.3:
+    resolution: {integrity: sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==}
     hasBin: true
 
   better-sqlite3@9.6.0:
@@ -4640,10 +4656,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/core-auth@1.10.1':
+  '@azure/core-auth@1.10.1(supports-color@5.5.0)':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-util': 1.13.1
+      '@azure/core-util': 1.13.1(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -4651,10 +4667,10 @@ snapshots:
   '@azure/core-client@1.10.2':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.10.1
+      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
       '@azure/core-rest-pipeline': 1.24.0
       '@azure/core-tracing': 1.3.1
-      '@azure/core-util': 1.13.1
+      '@azure/core-util': 1.13.1(supports-color@5.5.0)
       '@azure/logger': 1.3.0
       tslib: 2.8.1
     transitivePeerDependencies:
@@ -4663,11 +4679,11 @@ snapshots:
   '@azure/core-rest-pipeline@1.24.0':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.10.1
+      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
       '@azure/core-tracing': 1.3.1
-      '@azure/core-util': 1.13.1
+      '@azure/core-util': 1.13.1(supports-color@5.5.0)
       '@azure/logger': 1.3.0
-      '@typespec/ts-http-runtime': 0.3.6
+      '@typespec/ts-http-runtime': 0.3.6(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -4676,10 +4692,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/core-util@1.13.1':
+  '@azure/core-util@1.13.1(supports-color@5.5.0)':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@typespec/ts-http-runtime': 0.3.6
+      '@typespec/ts-http-runtime': 0.3.6(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -4687,11 +4703,11 @@ snapshots:
   '@azure/identity@4.13.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.10.1
+      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
       '@azure/core-client': 1.10.2
       '@azure/core-rest-pipeline': 1.24.0
       '@azure/core-tracing': 1.3.1
-      '@azure/core-util': 1.13.1
+      '@azure/core-util': 1.13.1(supports-color@5.5.0)
       '@azure/logger': 1.3.0
       '@azure/msal-browser': 5.14.0
       '@azure/msal-node': 5.2.5
@@ -4702,7 +4718,7 @@ snapshots:
 
   '@azure/logger@1.3.0':
     dependencies:
-      '@typespec/ts-http-runtime': 0.3.6
+      '@typespec/ts-http-runtime': 0.3.6(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -5170,7 +5186,7 @@ snapshots:
 
   '@microsoft/agents-m365copilot-core@1.0.0':
     dependencies:
-      '@azure/core-auth': 1.10.1
+      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
       '@microsoft/kiota-authentication-azure': 1.0.0-preview.103
       '@microsoft/kiota-bundle': 1.0.0-preview.103
       tslib: 2.8.1
@@ -5192,7 +5208,7 @@ snapshots:
 
   '@microsoft/kiota-authentication-azure@1.0.0-preview.103':
     dependencies:
-      '@azure/core-auth': 1.10.1
+      '@azure/core-auth': 1.10.1(supports-color@5.5.0)
       '@microsoft/kiota-abstractions': 1.0.0-preview.103
       '@opentelemetry/api': 1.9.1
       tslib: 2.8.1
@@ -5740,6 +5756,11 @@ snapshots:
 
   '@types/json5@0.0.29': {}
 
+  '@types/jsonwebtoken@9.0.10':
+    dependencies:
+      '@types/ms': 2.1.0
+      '@types/node': 22.20.0
+
   '@types/lodash@4.14.117': {}
 
   '@types/mdast@4.0.4':
@@ -5951,10 +5972,10 @@ snapshots:
       '@typescript-eslint/types': 7.18.0
       eslint-visitor-keys: 3.4.3
 
-  '@typespec/ts-http-runtime@0.3.6':
+  '@typespec/ts-http-runtime@0.3.6(supports-color@5.5.0)':
     dependencies:
-      http-proxy-agent: 7.0.2
-      https-proxy-agent: 7.0.6
+      http-proxy-agent: 7.0.2(supports-color@5.5.0)
+      https-proxy-agent: 7.0.6(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -6245,6 +6266,8 @@ snapshots:
   base64id@2.0.0: {}
 
   baseline-browser-mapping@2.10.38: {}
+
+  bcryptjs@3.0.3: {}
 
   better-sqlite3@9.6.0:
     dependencies:
@@ -7422,14 +7445,14 @@ snapshots:
       statuses: 2.0.2
       toidentifier: 1.0.1
 
-  http-proxy-agent@7.0.2:
+  http-proxy-agent@7.0.2(supports-color@5.5.0):
     dependencies:
       agent-base: 7.1.4
       debug: 4.4.3(supports-color@5.5.0)
     transitivePeerDependencies:
       - supports-color
 
-  https-proxy-agent@7.0.6:
+  https-proxy-agent@7.0.6(supports-color@5.5.0):
     dependencies:
       agent-base: 7.1.4
       debug: 4.4.3(supports-color@5.5.0)

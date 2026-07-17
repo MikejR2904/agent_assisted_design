@@ -1,18 +1,27 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import multer from 'multer';
 import { ProjectService } from '../services/ProjectService';
-import { ProjectCreateSchema } from '@agent_design/shared';
+import { ProjectCreateSchema, ProjectUpdateSchema } from '@agent_design/shared';
+import { validateBody } from '../middleware/validation';
+import { optionalAuth } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+// "Owner" filter: undefined for unauthenticated or admin callers (unfiltered — today's
+// behavior), otherwise the caller's own id (their projects + pre-existing unowned ones).
+function ownerFilterFor(req: Request): string | undefined {
+  return req.user && req.user.role !== 'admin' ? req.user.id : undefined;
+}
+
 export function projectsRouter(projectService: ProjectService): Router {
   const router = Router();
+  router.use(optionalAuth);
 
-  // Projects 
-  router.get('/', async (_req, res) => {
+  // Projects
+  router.get('/', async (req, res) => {
     try {
-      const projects = await projectService.listProjects();
+      const projects = await projectService.listProjects(ownerFilterFor(req));
       res.json(projects);
     } catch (err) {
       logger.error('Failed to list projects', err);
@@ -30,13 +39,9 @@ export function projectsRouter(projectService: ProjectService): Router {
     }
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', validateBody(ProjectCreateSchema), async (req, res) => {
     try {
-      const parsed = ProjectCreateSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: parsed.error.issues });
-      }
-      const project = await projectService.createProject(parsed.data);
+      const project = await projectService.createProject(req.body, req.user?.id);
       res.json(project);
     } catch (err) {
       logger.error('Failed to create project', err);
@@ -44,10 +49,9 @@ export function projectsRouter(projectService: ProjectService): Router {
     }
   });
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', validateBody(ProjectUpdateSchema), async (req, res) => {
     try {
-      const updates = req.body;
-      const project = await projectService.updateProject(req.params.id, updates);
+      const project = await projectService.updateProject(req.params.id, req.body);
       if (!project) return res.status(404).json({ error: 'Project not found' });
       res.json(project);
     } catch (err) {

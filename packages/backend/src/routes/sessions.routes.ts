@@ -1,12 +1,22 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { SessionService } from '../services/SessionService';
+import { SessionCreateSchema, SessionTitleUpdateSchema } from '@agent_design/shared/types';
+import { validateBody } from '../middleware/validation';
+import { optionalAuth } from '../middleware/auth';
+
+// "Owner" filter: undefined for unauthenticated or admin callers (unfiltered — today's
+// behavior), otherwise the caller's own id (their sessions + pre-existing unowned ones).
+function ownerFilterFor(req: Request): string | undefined {
+  return req.user && req.user.role !== 'admin' ? req.user.id : undefined;
+}
 
 export function sessionsRouter(sessionService: SessionService): Router {
   const router = Router();
+  router.use(optionalAuth);
 
   // GET /api/sessions
-  router.get('/', async (_req, res) => {
-    const sessions = await sessionService.readSessions();
+  router.get('/', async (req, res) => {
+    const sessions = await sessionService.readSessions(ownerFilterFor(req));
     // Return only metadata (omit messages to reduce payload)
     const list = sessions.map(({ messages, ...rest }) => rest);
     res.json(list);
@@ -20,20 +30,15 @@ export function sessionsRouter(sessionService: SessionService): Router {
   });
 
   // POST /api/sessions (create or update)
-  router.post('/', async (req, res) => {
-    const { id, condition, agentIds, title } = req.body;
-    if (!id || !condition) {
-      return res.status(400).json({ error: 'id and condition are required' });
-    }
-    const session = await sessionService.createSession(id, condition, agentIds || [], title);
+  router.post('/', validateBody(SessionCreateSchema), async (req, res) => {
+    const { id, condition, agentIds, title, projectId } = req.body;
+    const session = await sessionService.createSession(id, condition, agentIds, title, projectId, req.user?.id);
     res.json(session);
   });
 
   // PUT /api/sessions/:id/title
-  router.put('/:id/title', async (req, res) => {
-    const { title } = req.body;
-    if (!title) return res.status(400).json({ error: 'title required' });
-    await sessionService.updateSessionTitle(req.params.id, title);
+  router.put('/:id/title', validateBody(SessionTitleUpdateSchema), async (req, res) => {
+    await sessionService.updateSessionTitle(req.params.id, req.body.title);
     res.json({ success: true });
   });
 

@@ -1,6 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { AppConfigSchema, type AppConfig } from '@agent_design/shared/schemas';
+
+// Generated once per process (not per load()/reload() call) so hot-reloading config/app.json
+// never rotates the JWT secret out from under already-issued tokens. Only actually used as the
+// final fallback when nothing else supplies auth.jwtSecret — see load() below.
+const RANDOM_JWT_SECRET_FALLBACK = crypto.randomBytes(32).toString('hex');
+let warnedAboutRandomSecret = false;
 
 // Standardizes on process.cwd()-relative resolution (cwd = packages/backend under the `pnpm
 // --filter backend dev/start` scripts) — the convention already used by ProviderConfigLoader,
@@ -37,6 +44,7 @@ function readEnvOverrides(): Record<string, unknown> {
   if (process.env.LOG_LEVEL) overrides.telemetry = { logLevel: process.env.LOG_LEVEL };
   if (process.env.DOCKER_ENABLED) overrides.docker = { enabled: process.env.DOCKER_ENABLED === 'true' };
   if (process.env.DOCKER_IMAGE) overrides.docker = { ...overrides.docker, image: process.env.DOCKER_IMAGE };
+  if (process.env.JWT_SECRET) overrides.auth = { jwtSecret: process.env.JWT_SECRET };
 
   const paths: Record<string, string> = {};
   if (process.env.WORKSPACE_ROOT) paths.workspaceRoot = process.env.WORKSPACE_ROOT;
@@ -95,6 +103,21 @@ export class ConfigManager {
       { paths: computePathDefaults() },
       deepMerge(readAppConfigFile(), readEnvOverrides()),
     );
-    return AppConfigSchema.parse(merged);
+    const config = AppConfigSchema.parse(merged);
+
+    if (!config.auth.jwtSecret) {
+      config.auth.jwtSecret = RANDOM_JWT_SECRET_FALLBACK;
+      if (!warnedAboutRandomSecret) {
+        warnedAboutRandomSecret = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[ConfigManager] No auth.jwtSecret configured (JWT_SECRET env var or config/app.json) — ' +
+          'using a randomly generated secret for this process. Tokens will stop validating on restart. ' +
+          'Set JWT_SECRET for a stable secret.',
+        );
+      }
+    }
+
+    return config;
   }
 }

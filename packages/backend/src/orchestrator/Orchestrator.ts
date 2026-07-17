@@ -45,6 +45,8 @@ export class Orchestrator {
     {
       resolve: (approved: boolean, modified?: { command: string; args: string[] }) => void;
       reject: (err: Error) => void;
+      context: { sessionId: string; agentId: string; taskId: string; tool: string; originalCommand: string };
+      timeout?: NodeJS.Timeout;
     }
   >();
 
@@ -323,7 +325,13 @@ export class Orchestrator {
         // Emit approval request to frontend
         this.io.emit(WS_EVENTS.APPROVAL_REQUEST, approvalData);
         // Wait for user decision (Promise that resolves when user responds)
-        const { approved, modified } = await this.waitForApproval(approvalId);
+        const { approved, modified } = await this.waitForApproval(approvalId, {
+          sessionId,
+          agentId: agent.id,
+          taskId,
+          tool: toolReq.tool,
+          originalCommand: JSON.stringify(toolReq.args),
+        });
         if (!approved) {
           // User denied -> inject a message and loop (without incrementing attempts)
           agent.addUserMessage(
@@ -466,22 +474,28 @@ export class Orchestrator {
     this.reflexionLoop.cleanup(taskId);
   }
 
-  private waitForApproval(approvalId: string): Promise<{ approved: boolean; modified?: { command: string; args: string[] } }> {
+  private waitForApproval(
+    approvalId: string,
+    context: { sessionId: string; agentId: string; taskId: string; tool: string; originalCommand: string },
+  ): Promise<{ approved: boolean; modified?: { command: string; args: string[] } }> {
     return new Promise((resolve, reject) => {
-      // Store the resolver in the pending map
-      this.pendingApprovals.set(approvalId, {
+      const entry: {
+        resolve: (approved: boolean, modified?: { command: string; args: string[] }) => void;
+        reject: (err: Error) => void;
+        context: typeof context;
+        timeout?: NodeJS.Timeout;
+      } = {
         resolve: (approved, modified) => resolve({ approved, modified }),
         reject: (err) => reject(err),
-      });
+        context,
+      };
+      this.pendingApprovals.set(approvalId, entry);
 
       // Set a timeout to prevent hanging
-      const timeout = setTimeout(() => {
+      entry.timeout = setTimeout(() => {
         this.pendingApprovals.delete(approvalId);
         reject(new Error(`Approval request ${approvalId} timed out after 5 minutes`));
       }, 5 * 60 * 1000); // 5 min
-
-      // Store timeout handle to clear later
-      (this.pendingApprovals.get(approvalId) as any).timeout = timeout;
     });
   }
 
@@ -495,12 +509,23 @@ export class Orchestrator {
       logger.warn('Approval request not found', { requestId });
       return;
     }
-    // Clear the timeout
-    clearTimeout((pending as any).timeout);
-    // Resolve the promise
+    clearTimeout(pending.timeout);
     pending.resolve(approved, modified);
     this.pendingApprovals.delete(requestId);
-    logger.info('Approval resolved', { requestId, approved });
+
+    const action: 'approved' | 'denied' | 'modified' = !approved ? 'denied' : modified ? 'modified' : 'approved';
+    await this.telemetryService.log({
+      type: 'human_action',
+      sessionId: pending.context.sessionId,
+      timestamp: new Date().toISOString(),
+      action,
+      tool: pending.context.tool,
+      taskId: pending.context.taskId,
+      originalCommand: pending.context.originalCommand,
+      modifiedCommand: modified ? JSON.stringify(modified) : undefined,
+    });
+
+    logger.info('Approval resolved', { requestId, approved, action });
   }
 
   async setGate(gate: Gate, sessionId: string, triggeredBy: 'human' | 'agent' = 'human'): Promise<void> {
