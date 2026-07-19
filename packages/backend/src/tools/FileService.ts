@@ -94,6 +94,43 @@ export class FileService {
     await fs.mkdir(full, { recursive: true });
   }
 
+  private assertDestNotLocked(relativePath: string, fullDest: string): void {
+    if (LOCKED_FILES.some((f) => fullDest.endsWith(f))) {
+      throw new AppError(
+        `Destination is a protected file: ${relativePath}`,
+        ErrorCategory.VALIDATION,
+        false,
+        `"${relativePath}" is a protected file and cannot be overwritten.`,
+      );
+    }
+  }
+
+  async movePath(relativeSrc: string, relativeDest: string): Promise<void> {
+    const src = this.resolve(relativeSrc);
+    const dest = this.resolve(relativeDest);
+    if (LOCKED_FILES.some((f) => src.endsWith(f))) {
+      throw new AppError(
+        `File is locked and cannot be moved: ${relativeSrc}`,
+        ErrorCategory.VALIDATION,
+        false,
+        `"${relativeSrc}" is a protected file and cannot be moved.`,
+      );
+    }
+    this.assertDestNotLocked(relativeDest, dest);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.rename(src, dest);
+    logger.info('Path moved', { src: relativeSrc, dest: relativeDest });
+  }
+
+  async copyPath(relativeSrc: string, relativeDest: string): Promise<void> {
+    const src = this.resolve(relativeSrc);
+    const dest = this.resolve(relativeDest);
+    this.assertDestNotLocked(relativeDest, dest);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.cp(src, dest, { recursive: true });
+    logger.info('Path copied', { src: relativeSrc, dest: relativeDest });
+  }
+
   async copyDirectory(srcAbsolute: string, destRelative: string): Promise<void> {
     const dest = this.resolve(destRelative);
     await fs.cp(srcAbsolute, dest, { recursive: true });

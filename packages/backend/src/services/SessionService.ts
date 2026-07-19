@@ -87,6 +87,10 @@ export class SessionService {
     this.repo.deleteById(id);
   }
 
+  async deleteMessagesFrom(sessionId: string, messageId: string): Promise<boolean> {
+    return this.repo.deleteMessagesFrom(sessionId, messageId);
+  }
+
   async linkToProject(sessionId: string, projectId: string): Promise<void> {
     if (!this.repo.exists(sessionId)) return;
     this.repo.setProjectId(sessionId, projectId, new Date().toISOString());

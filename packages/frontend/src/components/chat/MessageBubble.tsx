@@ -3,13 +3,15 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Brain, User, Info, Terminal, Lightbulb, ChevronDown } from 'lucide-react';
+import { Brain, User, Info, Terminal, Lightbulb, ChevronDown, Pencil, Check, X } from 'lucide-react';
 import type { ChatMessage } from '../../lib/stores/chatStore';
 import { useAgentStore } from '../../lib/stores/agentStore';
 import { clsx } from 'clsx';
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  /** Edits a past user message: discards everything after it and resends from that point. */
+  onEdit?: (messageId: string, newContent: string) => void;
 }
 
 function ChainOfThought({ message }: { message: ChatMessage }) {
@@ -41,9 +43,11 @@ function ChainOfThought({ message }: { message: ChatMessage }) {
   );
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onEdit }: MessageBubbleProps) {
   const { agents } = useAgentStore();
   const agent = message.agentId ? agents.find((a) => a.id === message.agentId) : null;
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.content);
 
   if (message.role === 'system') {
     return (
@@ -71,7 +75,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   return (
-    <div className={clsx('flex gap-3 py-3', isUser && 'flex-row-reverse')}>
+    <div className={clsx('flex gap-3 py-3 group', isUser && 'flex-row-reverse')}>
       {/* Avatar */}
       <div className={clsx(
         'w-7 h-7 rounded flex items-center justify-center flex-shrink-0 mt-0.5',
@@ -91,7 +95,57 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </p>
         )}
         {!isUser && message.reasoning && <ChainOfThought message={message} />}
-        <div className={clsx(
+        {isUser && isEditing ? (
+          <div className="w-full">
+            <textarea
+              autoFocus
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  const trimmed = editValue.trim();
+                  if (trimmed && trimmed !== message.content) onEdit?.(message.id, trimmed);
+                  setIsEditing(false);
+                } else if (e.key === 'Escape') {
+                  setEditValue(message.content);
+                  setIsEditing(false);
+                }
+              }}
+              rows={3}
+              className="w-full bg-surface-elevated text-white text-sm font-mono px-3 py-2 rounded-lg border border-accent/50 focus:outline-none resize-none"
+            />
+            <div className="flex items-center justify-end gap-2 mt-1.5">
+              <button
+                onClick={() => { setEditValue(message.content); setIsEditing(false); }}
+                className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 font-mono"
+              >
+                <X size={11} /> Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const trimmed = editValue.trim();
+                  if (trimmed && trimmed !== message.content) onEdit?.(message.id, trimmed);
+                  setIsEditing(false);
+                }}
+                className="flex items-center gap-1 text-[10px] text-accent hover:text-accent-hover font-mono"
+              >
+                <Check size={11} /> Save &amp; resend
+              </button>
+            </div>
+          </div>
+        ) : (
+        <div className="flex items-start gap-1.5">
+          {isUser && onEdit && (
+            <button
+              onClick={() => { setEditValue(message.content); setIsEditing(true); }}
+              title="Edit message"
+              className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-accent mt-2.5 flex-shrink-0"
+            >
+              <Pencil size={12} />
+            </button>
+          )}
+          <div className={clsx(
           'rounded-lg px-3 py-2.5 text-sm',
           isUser
             ? 'bg-accent/20 text-white'
@@ -131,7 +185,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               )}
             </div>
           )}
+          </div>
         </div>
+        )}
         <p className="text-xs text-gray-600 mt-1 font-mono">
           {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
         </p>

@@ -42,6 +42,9 @@ interface SessionStore {
   setGate: (gate: Gate) => void;
   addMessage: (msg: ChatMessage) => void;
   updateLastMessage: (updater: (msg: ChatMessage) => ChatMessage) => void;
+  /** Drops the given message and everything after it (chronologically) from the active
+   * session — the client-side half of the "edit & truncate" chat-edit flow. */
+  truncateMessagesFrom: (messageId: string) => void;
   updateTokens: (delta: number) => void;
   completeGate: (gate: Gate) => void;
   setGateApproval: (gate: Gate, approval: GateApproval) => void;
@@ -179,6 +182,17 @@ export const useSessionStore = create<SessionStore>()(
             const msgs = [...s.messages];
             msgs[msgs.length - 1] = updater(msgs[msgs.length - 1]);
             return { ...s, messages: msgs, updatedAt: new Date().toISOString() };
+          }),
+        }));
+      },
+
+      truncateMessagesFrom: (messageId) => {
+        set((state) => ({
+          sessions: state.sessions.map((s) => {
+            if (s.id !== state.activeSessionId) return s;
+            const idx = s.messages.findIndex((m) => m.id === messageId);
+            if (idx === -1) return s;
+            return { ...s, messages: s.messages.slice(0, idx), updatedAt: new Date().toISOString() };
           }),
         }));
       },

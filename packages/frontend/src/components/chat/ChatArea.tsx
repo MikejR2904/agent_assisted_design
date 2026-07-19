@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useEffect, useState } from 'react';
-import { Send, Loader2, ChevronDown, AlertTriangle, X, KeyRound } from 'lucide-react';
+import { Send, Loader2, ChevronDown, AlertTriangle, X, KeyRound, Download } from 'lucide-react';
 import { useChatStore } from '../../lib/stores/chatStore';
 import { useConfigStore } from '@/lib/stores/configStore';
 import { useSessionStore } from '@/lib/stores/sessionStore';
@@ -86,7 +86,7 @@ export function ChatArea() {
   const { sessionId } = useConfigStore();
   const { getActiveSession, addAttachment } = useSessionStore();
   const { getActiveProject } = useProjectStore();
-  const { sendMessage, cancelTask } = useWebSocket();
+  const { sendMessage, cancelTask, editMessage } = useWebSocket();
 
   const session = getActiveSession();
   const messages = session?.messages ?? [];
@@ -149,6 +149,26 @@ export function ChatArea() {
     }
   };
 
+  const handleExport = () => {
+    if (!session || messages.length === 0) return;
+    const lines = messages.map((msg) => {
+      const agentName = msg.agentId ? agents.find((a) => a.id === msg.agentId)?.name : undefined;
+      const heading = msg.role === 'user' ? 'User' : agentName ? agentName : msg.role === 'assistant' ? 'Assistant' : msg.role;
+      const timestamp = msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '';
+      return `## ${heading}${timestamp ? ` — ${timestamp}` : ''}\n\n${msg.content}\n`;
+    });
+    const markdown = `# Chat session — ${session.id}\n\n${lines.join('\n')}`;
+    const blob = new Blob([markdown], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `session-${session.id}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const selectedAgentName = agents.find((a) => a.id === selectedAgentId)?.name;
+
   const project = getActiveProject();
   const projectHasMemory = project && session?.projectId === project.id;
 
@@ -167,6 +187,18 @@ export function ChatArea() {
       )}
       {/* Messages Container */}
       <div className="flex-1 overflow-y-auto px-4 py-2">
+        {isMounted && messages.length > 0 && (
+          <div className="flex justify-end mb-1">
+            <button
+              onClick={handleExport}
+              title="Export session as Markdown"
+              className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-accent font-mono transition-colors"
+            >
+              <Download size={11} />
+              Export
+            </button>
+          </div>
+        )}
         {/* API key error banner */}
         {apiKeyError && (
           <ApiKeyErrorBanner message={apiKeyError} onDismiss={() => setApiKeyError(null)} />
@@ -199,7 +231,11 @@ export function ChatArea() {
         ) : (
           <>
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onEdit={(messageId, newContent) => editMessage(messageId, newContent, selectedAgentId ?? undefined)}
+              />
             ))}
 
             {/* Pending tool request */}
@@ -211,7 +247,7 @@ export function ChatArea() {
             {isProcessing && !pendingToolRequest && (
               <div className="flex items-center gap-2 py-2 text-xs text-gray-500 font-mono">
                 <Loader2 size={12} className="animate-spin" />
-                Agent thinking...
+                {selectedAgentName ? `${selectedAgentName} is thinking...` : 'Agent thinking...'}
               </div>
             )}
           </>
@@ -240,7 +276,7 @@ export function ChatArea() {
             <select
               value={selectedAgentId || ''}
               onChange={(e) => setSelectedAgentId(e.target.value)}
-              className="appearance-none bg-surface-elevated border border-surface-overlay rounded-lg px-3 py-2.5 text-sm font-mono text-gray-300 focus:outline-none focus:border-accent/50 pr-8"
+              className="appearance-none bg-surface-elevated border border-surface-overlay rounded-lg px-3 py-2.5 text-sm font-mono text-gray-300 focus:outline-none focus:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/40 pr-8"
               disabled={!sessionId || isProcessing || agents.length === 0}
             >
               {agents.length === 0 ? (
@@ -267,7 +303,7 @@ export function ChatArea() {
             onKeyDown={handleKeyDown}
             placeholder={sessionId ? 'Describe a design task... (⇧↵ for newline)' : 'Initialize workspace to chat'}
             disabled={!sessionId || isProcessing}
-            className="flex-1 bg-surface-elevated text-white text-sm font-mono placeholder:text-gray-600 px-3 py-2.5 rounded-lg border border-surface-overlay focus:outline-none focus:border-accent/50 resize-none disabled:opacity-40 min-h-[42px]"
+            className="flex-1 bg-surface-elevated text-white text-sm font-mono placeholder:text-gray-600 px-3 py-2.5 rounded-lg border border-surface-overlay focus:outline-none focus:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/40 resize-none disabled:opacity-40 min-h-[42px]"
             rows={1}
             style={{ height: 'auto' }}
           />
@@ -275,7 +311,7 @@ export function ChatArea() {
           <button
             onClick={handleSend}
             disabled={!input.trim() || isProcessing || !sessionId || !selectedAgentId}
-            className="flex-shrink-0 w-10 h-10 rounded-lg bg-accent hover:bg-accent-hover disabled:bg-surface-overlay disabled:text-gray-600 text-white flex items-center justify-center transition-colors"
+            className="flex-shrink-0 w-10 h-10 rounded-lg bg-accent hover:bg-accent-hover disabled:bg-surface-overlay disabled:text-gray-600 text-white flex items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
           >
             {isProcessing
               ? <Loader2 size={16} className="animate-spin" />
@@ -286,9 +322,11 @@ export function ChatArea() {
           {isProcessing && (
             <button
               onClick={handleCancel}
-              className="flex-shrink-0 w-10 h-10 rounded-lg bg-error hover:bg-error/80 text-white flex items-center justify-center transition-colors"
+              title="Stop generation"
+              className="flex-shrink-0 h-10 px-3 rounded-lg bg-error hover:bg-error/80 text-white flex items-center gap-1.5 text-xs font-mono transition-colors"
             >
-              <X size={16} />
+              <X size={14} />
+              Stop
             </button>
           )}
         </div>

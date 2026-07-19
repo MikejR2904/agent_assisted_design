@@ -133,6 +133,20 @@ export class SessionRepository {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id); // messages cascade
   }
 
+  // Deletes the given message and every message after it (chronologically) in the same
+  // session. ISO-8601 timestamps sort correctly as text, matching the ORDER BY timestamp
+  // ASC read path above. Returns false if the message wasn't found (nothing to delete).
+  deleteMessagesFrom(sessionId: string, messageId: string): boolean {
+    const target = this.db
+      .prepare('SELECT timestamp FROM messages WHERE session_id = ? AND id = ?')
+      .get(sessionId, messageId) as { timestamp: string } | undefined;
+    if (!target) return false;
+    this.db
+      .prepare('DELETE FROM messages WHERE session_id = ? AND timestamp >= ?')
+      .run(sessionId, target.timestamp);
+    return true;
+  }
+
   // Sessions belonging to a project, for ProjectRepository's derived sessionIds.
   findIdsByProjectId(projectId: string): string[] {
     return (this.db.prepare('SELECT id FROM sessions WHERE project_id = ?').all(projectId) as { id: string }[])

@@ -48,5 +48,13 @@ export function sessionsRouter(sessionService: SessionService): Router {
     res.status(204).send();
   });
 
+  // DELETE /api/sessions/:sessionId/messages/:messageId/after
+  // Deletes the target message and everything after it — backs the chat "edit & truncate" flow.
+  router.delete('/:sessionId/messages/:messageId/after', async (req, res) => {
+    const deleted = await sessionService.deleteMessagesFrom(req.params.sessionId, req.params.messageId);
+    if (!deleted) return res.status(404).json({ error: 'Message not found' });
+    res.json({ success: true });
+  });
+
   return router;
 }

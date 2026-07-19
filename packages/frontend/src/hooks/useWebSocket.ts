@@ -45,7 +45,7 @@ export function useWebSocket() {
   const { finalizeLastMessage, setPendingToolRequest, setProcessing, setApiKeyError, setConnectionError } = useChatStore();
   const { setCurrentGate, updateMetrics, setSessionId, setPPAMetrics } = useTelemetryStore();
   const { setAgentStatus } = useAgentStore();
-  const { activeSessionId, createSession, addMessage, updateLastMessage, getActiveSession, activeCondition, setGateApproval } = useSessionStore();
+  const { activeSessionId, createSession, addMessage, updateLastMessage, truncateMessagesFrom, getActiveSession, activeCondition, setGateApproval } = useSessionStore();
   const { getActiveProject } = useProjectStore();
 
   useEffect(() => {
@@ -271,5 +271,26 @@ export function useWebSocket() {
     setProcessing(false); // immediately reflect stopped state in UI
   }, [activeSessionId]);
 
-  return { sendMessage, approveTool, denyTool, modifyTool, advanceGate, approveGate, initWorkspace, cancelTask };
+  // Editing a past user message discards everything after it (both server-side and in the
+  // visible transcript), then resends the edited content as a normal new message — reusing
+  // all existing send/stream/DB-write plumbing rather than any special "rewind" event.
+  const editMessage = useCallback(async (messageId: string, newContent: string, agentId?: string) => {
+    const session = getActiveSession();
+    if (!session) return;
+    try {
+      const res = await fetch(`/api/sessions/${session.id}/messages/${messageId}/after`, { method: 'DELETE' });
+      if (!res.ok) {
+        setConnectionError('Failed to edit message. Please check server.');
+        return;
+      }
+    } catch (err) {
+      console.error('Edit message error:', err);
+      setConnectionError('Failed to edit message. Please check server.');
+      return;
+    }
+    truncateMessagesFrom(messageId);
+    await sendMessage(newContent, agentId);
+  }, [activeSessionId, getActiveSession, truncateMessagesFrom, sendMessage]);
+
+  return { sendMessage, approveTool, denyTool, modifyTool, advanceGate, approveGate, initWorkspace, cancelTask, editMessage };
 }

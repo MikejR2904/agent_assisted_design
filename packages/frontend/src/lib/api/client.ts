@@ -106,6 +106,18 @@ export const filesApi = {
     if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
     return res.json();
   },
+
+  move: (condition: string, sourcePath: string, destPath: string): Promise<{ success: boolean; path: string }> =>
+    request('/files/move', {
+      method: 'POST',
+      body: JSON.stringify({ condition, sourcePath, destPath }),
+    }),
+
+  copy: (condition: string, sourcePath: string, destPath: string): Promise<{ success: boolean; path: string }> =>
+    request('/files/copy', {
+      method: 'POST',
+      body: JSON.stringify({ condition, sourcePath, destPath }),
+    }),
 };
 
 // Telemetry

@@ -177,6 +177,38 @@ export function filesRouter(): Router {
     res.json({ success: true, count: entries.filter(e => !e.isDirectory).length });
   });
 
+  // POST /api/files/move { condition, sourcePath, destPath }
+  router.post('/move', async (req, res) => {
+    try {
+      const { condition, sourcePath, destPath } = req.body as { condition?: string; sourcePath: string; destPath: string };
+      if (!sourcePath || !destPath) return res.status(400).json({ error: 'sourcePath and destPath required' });
+      const conditionDir = path.join(WORKSPACE_ROOT, `condition_${condition ?? 'agent-assisted'}`);
+      const fileService = new FileService(conditionDir);
+      await fileService.movePath(sourcePath, destPath);
+      logger.info('File moved', { sourcePath, destPath, condition });
+      res.json({ success: true, path: destPath });
+    } catch (err) {
+      logger.error('Move error', { err: (err as Error).message });
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/files/copy { condition, sourcePath, destPath }
+  router.post('/copy', async (req, res) => {
+    try {
+      const { condition, sourcePath, destPath } = req.body as { condition?: string; sourcePath: string; destPath: string };
+      if (!sourcePath || !destPath) return res.status(400).json({ error: 'sourcePath and destPath required' });
+      const conditionDir = path.join(WORKSPACE_ROOT, `condition_${condition ?? 'agent-assisted'}`);
+      const fileService = new FileService(conditionDir);
+      await fileService.copyPath(sourcePath, destPath);
+      logger.info('File copied', { sourcePath, destPath, condition });
+      res.json({ success: true, path: destPath });
+    } catch (err) {
+      logger.error('Copy error', { err: (err as Error).message });
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   // DELETE /api/files/delete?path=...&condition=...
   router.delete('/delete', async (req, res) => {
     try {

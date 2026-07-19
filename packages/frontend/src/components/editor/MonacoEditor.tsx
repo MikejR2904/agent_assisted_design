@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { Save, Loader2, Lock, RefreshCw } from 'lucide-react';
 import { filesApi } from '@/lib/api/client';
@@ -27,6 +27,8 @@ interface MonacoEditorProps {
   language?: string;
   readOnly?: boolean;
   onSave?: (content: string) => void;
+  /** Fires whenever the unsaved-changes state changes — lets the parent gate navigation/tab-close. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Determine Monaco language from file extension */
@@ -53,6 +55,7 @@ export function MonacoEditor({
   initialContent = '',
   readOnly = false,
   onSave,
+  onDirtyChange,
 }: MonacoEditorProps) {
   const [content, setContent] = useState(initialContent);
   const [isDirty, setIsDirty] = useState(false);
@@ -64,6 +67,10 @@ export function MonacoEditor({
 
   const language = getLanguage(filePath);
   const filename = filePath.split('/').pop() ?? filePath;
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const handleChange = (value: string | undefined) => {
     if (readOnly) return;
@@ -144,6 +151,7 @@ export function MonacoEditor({
               disabled={!isDirty || isSaving}
               className={clsx(
                 'flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-mono transition-colors',
+                'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/40',
                 saveStatus === 'saved' && 'text-success',
                 saveStatus === 'error' && 'text-error',
                 isDirty && saveStatus === 'idle'
