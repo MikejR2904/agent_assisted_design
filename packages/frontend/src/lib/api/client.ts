@@ -120,6 +120,71 @@ export const filesApi = {
     }),
 };
 
+// Verilator lint diagnostics
+export interface VerilatorDiagnostic {
+  line: number;
+  column: number;
+  severity: 'error' | 'warning';
+  code?: string;
+  message: string;
+}
+
+export const lintApi = {
+  verilog: (condition: string, path: string): Promise<{ diagnostics: VerilatorDiagnostic[]; toolAvailable: boolean }> =>
+    request('/lint/verilog', {
+      method: 'POST',
+      body: JSON.stringify({ condition, path }),
+    }),
+};
+
+// Git integration (local-only: status/diff/log/blame/stage/commit — no branching/push/pull)
+export interface GitFileStatus {
+  path: string;
+  status: 'modified' | 'staged' | 'untracked' | 'deleted';
+}
+export interface GitLogEntry {
+  hash: string;
+  date: string;
+  message: string;
+  author: string;
+}
+export interface GitBlameLine {
+  line: number;
+  hash: string;
+  author: string;
+  date: string;
+  summary: string;
+}
+
+export const gitApi = {
+  status: (condition: string): Promise<{ entries: GitFileStatus[] }> =>
+    request(`/git/status?condition=${encodeURIComponent(condition)}`),
+
+  diff: (condition: string, path: string, staged: boolean): Promise<{ diff: string }> =>
+    request(`/git/diff?condition=${encodeURIComponent(condition)}&path=${encodeURIComponent(path)}&staged=${staged}`),
+
+  show: (condition: string, path: string, ref = 'HEAD'): Promise<{ content: string }> =>
+    request(`/git/show?condition=${encodeURIComponent(condition)}&path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`),
+
+  log: (condition: string, path?: string): Promise<{ entries: GitLogEntry[] }> =>
+    request(`/git/log?condition=${encodeURIComponent(condition)}${path ? `&path=${encodeURIComponent(path)}` : ''}`),
+
+  blame: (condition: string, path: string): Promise<{ lines: GitBlameLine[] }> =>
+    request(`/git/blame?condition=${encodeURIComponent(condition)}&path=${encodeURIComponent(path)}`),
+
+  stage: (condition: string, paths: string[]): Promise<{ success: boolean }> =>
+    request('/git/stage', { method: 'POST', body: JSON.stringify({ condition, paths }) }),
+
+  unstage: (condition: string, paths: string[]): Promise<{ success: boolean }> =>
+    request('/git/unstage', { method: 'POST', body: JSON.stringify({ condition, paths }) }),
+
+  commit: (condition: string, message: string): Promise<{ hash: string }> =>
+    request('/git/commit', { method: 'POST', body: JSON.stringify({ condition, message }) }),
+
+  generateCommitMessage: (condition: string): Promise<{ message: string }> =>
+    request('/git/commit-message', { method: 'POST', body: JSON.stringify({ condition }) }),
+};
+
 // Telemetry
 export interface ExperimentMetrics {
   sessionId: string;

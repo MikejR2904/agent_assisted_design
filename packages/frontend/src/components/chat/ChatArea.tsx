@@ -76,12 +76,12 @@ function ConnectionBar({ message }: { message: string }) {
 
 export function ChatArea() {
   const [input, setInput] = useState('');
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [ pendingAttachments, setPendingAttachments ] = useState<LocalAttachment[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { agents } = useAgentStore();
+  // Lifted into agentStore (not local state) so the status bar can show the active agent too.
+  const { agents, activeAgentId: selectedAgentId, setActiveAgentId: setSelectedAgentId } = useAgentStore();
   const { isProcessing, pendingToolRequest, apiKeyError, connectionError, setApiKeyError } = useChatStore();
   const { sessionId } = useConfigStore();
   const { getActiveSession, addAttachment } = useSessionStore();

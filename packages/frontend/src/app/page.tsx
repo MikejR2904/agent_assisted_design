@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
   RefreshCw, ChevronDown, X, Lock, ChevronsLeft, ChevronsRight,
-  LayoutPanelLeft, MessageSquare, Code2, Users, Plug,
+  LayoutPanelLeft, MessageSquare, Code2, Users, Plug, GitBranch,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { GateStepper } from '@/components/panels/GateStepper';
@@ -15,12 +15,15 @@ const TerminalPanel = dynamic(
 import { AgentSummaryPanel } from '@/components/panels/AgentSummaryPanel';
 import { ChatArea } from '@/components/chat/ChatArea';
 import { FileExplorer } from '@/components/sidebar/FileExplorer';
+import { GitPanel } from '@/components/sidebar/GitPanel';
 import { ProjectSidebar } from '@/components/sidebar/ProjectSidebar';
 import { AgentList } from '@/components/sidebar/AgentList';
 import { AgentManager } from '@/components/AgentManager';
 import { ProviderManager } from '@/components/ProviderManager';
 import { MonacoEditor } from '@/components/editor/MonacoEditor';
 import { FileSearchModal } from '@/components/FileSearchModal';
+import { CommandPaletteModal } from '@/components/CommandPaletteModal';
+import { StatusBar } from '@/components/StatusBar';
 import { useAgentStore } from '@/lib/stores/agentStore';
 import { useConfigStore } from '@/lib/stores/configStore';
 import { useSessionStore } from '@/lib/stores/sessionStore';
@@ -32,7 +35,7 @@ import { clsx } from 'clsx';
 
 // Layout tab type
 type CenterTab = 'chat' | 'editor';
-type SidebarTab = 'files' | 'agents' | 'projects';
+type SidebarTab = 'files' | 'agents' | 'projects' | 'git';
 type RightTab = 'telemetry' | 'memory';
 
 interface OpenFile {
@@ -59,9 +62,11 @@ export default function WorkbenchPage() {
   const [showProviderManager, setShowProviderManager] = useState(false);
   const [showConditionMenu, setShowConditionMenu] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [dirtyByPath, setDirtyByPath] = useState<Record<string, boolean>>({});
+  const [eolByPath, setEolByPath] = useState<Record<string, 'LF' | 'CRLF'>>({});
   const [loadingFile, setLoadingFile] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalSize, setTerminalSize] = useState<{ width: number; height: number } | null>(null);
@@ -96,12 +101,16 @@ export default function WorkbenchPage() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [isAnyFileDirty]);
 
-  // Ctrl/Cmd+P — fuzzy file search
+  // Ctrl/Cmd+P — fuzzy file search; Ctrl/Cmd+Shift+P — command palette
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
-        setShowFileSearch(true);
+        if (e.shiftKey) {
+          setShowCommandPalette(true);
+        } else {
+          setShowFileSearch(true);
+        }
       }
     };
     window.addEventListener('keydown', handler);
@@ -182,6 +191,7 @@ export default function WorkbenchPage() {
   };
 
   const activeConditionMeta = EXPERIMENTAL_CONDITIONS[activeCondition as keyof typeof EXPERIMENTAL_CONDITIONS];
+  const activeEOL = activeFilePath ? eolByPath[activeFilePath] ?? null : null;
 
   return (
     <div className="flex flex-col h-full bg-surface overflow-hidden">
@@ -324,6 +334,12 @@ export default function WorkbenchPage() {
                 icon={<Users size={12} />}
                 label="Agents"
               />
+              <SidebarTabBtn
+                active={sidebarTab === 'git'}
+                onClick={() => setSidebarTab('git')}
+                icon={<GitBranch size={12} />}
+                label="Git"
+              />
               <button
                 onClick={() => setLeftCollapsed(true)}
                 title="Collapse sidebar"
@@ -344,6 +360,8 @@ export default function WorkbenchPage() {
                   selectedPath={activeFilePath ?? undefined}
                   onTerminalToggle={() => setShowTerminal(!showTerminal)}
                 />
+              ) : sidebarTab === 'git' ? (
+                <GitPanel />
               ) : (
                 <AgentList onManageClick={() => setShowAgentManager(true)} />
               )}
@@ -438,6 +456,7 @@ export default function WorkbenchPage() {
                           initialContent={f.content}
                           readOnly={f.locked}
                           onDirtyChange={(d) => setDirtyByPath((prev) => ({ ...prev, [f.path]: d }))}
+                          onMetaChange={(meta) => setEolByPath((prev) => ({ ...prev, [f.path]: meta.eol }))}
                         />
                       </div>
                     ))
@@ -478,6 +497,17 @@ export default function WorkbenchPage() {
           </aside>
         )}
       </div>
+
+      {/* ── Status bar ───────────────────────────────────────────────────── */}
+      <StatusBar
+        showTerminal={showTerminal}
+        onToggleTerminal={() => setShowTerminal(!showTerminal)}
+        leftCollapsed={leftCollapsed}
+        onToggleLeft={() => setLeftCollapsed(!leftCollapsed)}
+        rightCollapsed={rightCollapsed}
+        onToggleRight={() => setRightCollapsed(!rightCollapsed)}
+        activeFileEOL={activeEOL}
+      />
 
       {/* ── Agent Manager overlay ─────────────────────────────────────────── */}
       {showAgentManager && (
@@ -582,6 +612,33 @@ export default function WorkbenchPage() {
           condition={activeCondition}
           onSelect={handleFileSelect}
           onClose={() => setShowFileSearch(false)}
+        />
+      )}
+
+      {showCommandPalette && (
+        <CommandPaletteModal
+          commands={[
+            { id: 'toggle-terminal', label: 'Toggle Terminal', category: 'View', action: () => setShowTerminal((v) => !v) },
+            { id: 'toggle-left', label: 'Toggle Left Sidebar', category: 'View', action: () => setLeftCollapsed((v) => !v) },
+            { id: 'toggle-right', label: 'Toggle Right Panel', category: 'View', action: () => setRightCollapsed((v) => !v) },
+            { id: 'tab-chat', label: 'Switch to Chat', category: 'Navigate', action: () => setCenterTab('chat') },
+            { id: 'tab-editor', label: 'Switch to Editor', category: 'Navigate', action: () => setCenterTab('editor') },
+            { id: 'sidebar-files', label: 'Show Files', category: 'Navigate', action: () => setSidebarTab('files') },
+            { id: 'sidebar-agents', label: 'Show Agents', category: 'Navigate', action: () => setSidebarTab('agents') },
+            { id: 'sidebar-history', label: 'Show History', category: 'Navigate', action: () => setSidebarTab('projects') },
+            { id: 'right-telemetry', label: 'Show Telemetry', category: 'Navigate', action: () => setRightTab('telemetry') },
+            { id: 'right-memory', label: 'Show Memory', category: 'Navigate', action: () => setRightTab('memory') },
+            { id: 'open-agents', label: 'Open Agent Registry', category: 'Manage', action: () => setShowAgentManager(true) },
+            { id: 'open-providers', label: 'Open Provider Registry', category: 'Manage', action: () => setShowProviderManager(true) },
+            { id: 'file-search', label: 'Search Files…', category: 'Navigate', action: () => setShowFileSearch(true) },
+            ...CONDITIONS.map((c) => ({
+              id: `condition-${c.id}`,
+              label: `Switch Condition: ${c.label}`,
+              category: 'Condition',
+              action: () => handleSelectCondition(c.id as ExperimentalCondition),
+            })),
+          ]}
+          onClose={() => setShowCommandPalette(false)}
         />
       )}
     </div>

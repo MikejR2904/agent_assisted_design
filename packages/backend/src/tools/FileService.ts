@@ -14,6 +14,7 @@ export interface FileEntry {
   modifiedAt?: string;
   locked?: boolean;
   children?: FileEntry[];
+  gitStatus?: 'modified' | 'staged' | 'untracked' | 'deleted';
 }
 
 // List of files that are locked and cannot be written to by the agent; this is to protect critical configuration files from accidental overwrites by the agent. The agent can read these files but not modify them.

@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import AdmZip, { IZipEntry } from 'adm-zip';
 import fs from 'fs/promises';
 import { ConfigManager } from '../config/ConfigManager';
+import { GitService } from '../services/GitService';
 
 const { paths } = ConfigManager.getInstance().get();
 const WORKSPACE_ROOT = paths.workspaceRoot ?? path.resolve(process.cwd(), '../../workspaces');
@@ -17,12 +18,19 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
 });
 
-// Helper to recursively build tree
-async function buildTree(dir: string, relativePath: string = ''): Promise<FileEntry[]> {
+// Helper to recursively build tree. `gitStatusByPath` is an optional lookup (populated only
+// when the condition dir already has a .git repo — see the /tree route) used to annotate
+// entries with their git status; passing none just leaves every entry's gitStatus undefined.
+async function buildTree(
+  dir: string,
+  relativePath: string = '',
+  gitStatusByPath?: Map<string, FileEntry['gitStatus']>,
+): Promise<FileEntry[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const result: FileEntry[] = [];
 
   for (const entry of entries) {
+    if (entry.name === '.git') continue;
     const entryPath = path.join(relativePath, entry.name);
     const fullPath = path.join(dir, entry.name);
     const isDir = entry.isDirectory();
@@ -35,10 +43,11 @@ async function buildTree(dir: string, relativePath: string = ''): Promise<FileEn
       size: stat?.size,
       modifiedAt: stat?.mtime.toISOString(),
       locked: ['architecture.toml', 'gates.json'].includes(entry.name),
+      gitStatus: gitStatusByPath?.get(entryPath.split(path.sep).join('/')),
     };
 
     if (isDir) {
-      fileEntry.children = await buildTree(fullPath, entryPath);
+      fileEntry.children = await buildTree(fullPath, entryPath, gitStatusByPath);
     }
     result.push(fileEntry);
   }
@@ -62,7 +71,19 @@ export function filesRouter(): Router {
       } catch {
         return res.json([]);
       }
-      const tree = await buildTree(rootDir, '');
+      // Only annotate git status if a repo already exists — the file tree never
+      // triggers `git init` itself, that's lazy and scoped to the Git tab's own actions.
+      let gitStatusByPath: Map<string, FileEntry['gitStatus']> | undefined;
+      const hasGitRepo = await fs.access(path.join(rootDir, '.git')).then(() => true).catch(() => false);
+      if (hasGitRepo) {
+        try {
+          const entries = await new GitService(rootDir).status();
+          gitStatusByPath = new Map(entries.map((e) => [e.path, e.status]));
+        } catch (err) {
+          logger.debug('Git status lookup skipped for tree', { err: (err as Error).message });
+        }
+      }
+      const tree = await buildTree(rootDir, '', gitStatusByPath);
       res.json(tree);
     } catch (err) {
       logger.error('Tree build error', { err: (err as Error).message });

@@ -145,10 +145,14 @@ export class ModelRouter {
     return provider.generateNonStreaming(model, systemPrompt, messages);
   }
 
-  async summarize(messages: LLMMessage[]): Promise<string> {
-    const systemPrompt = `You are a summarization assistant. Your task is to summarize the conversation below in a concise, informative paragraph. Focus on key decisions, bugs fixed, design choices, and any conclusions reached. Keep the summary under 200 words.`;
-    const conversationText = messages.map(m => `${m.role}: ${m.content}`).join('\n');
-    const userPrompt = `Summarize the following conversation:\n\n${conversationText}`;
+  // `customSystemPrompt` lets callers other than the conversation-summary use case (e.g.
+  // AI-assisted commit messages) reuse the same free-model fallback chain below without
+  // getting wrapped in the default "summarize the conversation" framing.
+  async summarize(messages: LLMMessage[], customSystemPrompt?: string): Promise<string> {
+    const systemPrompt = customSystemPrompt ?? `You are a summarization assistant. Your task is to summarize the conversation below in a concise, informative paragraph. Focus on key decisions, bugs fixed, design choices, and any conclusions reached. Keep the summary under 200 words.`;
+    const userPrompt = customSystemPrompt
+      ? messages.map(m => m.content).join('\n')
+      : `Summarize the following conversation:\n\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}`;
     // Free models chain
     const freeModels: string[] = [
       'llama3-70b-8192',   // Groq free tier

@@ -27,12 +27,15 @@ export function getDecodedApiKey(agent: AgentConfig): string {
 interface AgentStore {
   agents: AgentConfig[];
   isLoading: boolean;
+  /** The agent currently selected for chat — shared between ChatArea and the status bar. */
+  activeAgentId: string | null;
 
   setAgents: (agents: AgentConfig[]) => void;
   addAgent: (data: Omit<AgentConfig, 'id' | 'status' | 'createdAt' | 'updatedAt'> & { apiKey?: string }) => Promise<void>;
   updateAgent: (id: string, updates: Partial<AgentConfig> & { apiKey?: string }) => Promise<void>;
   deleteAgent: (id: string) => Promise<void>;
   setAgentStatus: (id: string, status: AgentStatus) => void;
+  setActiveAgentId: (id: string | null) => void;
   fetchAgents: () => Promise<void>;
 }
 
@@ -41,7 +44,9 @@ export const useAgentStore = create<AgentStore>()(
     (set, ) => ({
       agents: [],
       isLoading: false,
+      activeAgentId: null,
       setAgents: (agents) => set({ agents }),
+      setActiveAgentId: (id) => set({ activeAgentId: id }),
 
       addAgent: async (data) => {
         // Encode API key before persisting
