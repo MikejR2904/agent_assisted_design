@@ -53,6 +53,14 @@ function parsePorcelainBlame(raw: string): GitBlameLine[] {
   return result;
 }
 
+// Routes create a fresh GitService per request (see git.routes.ts's gitServiceFor()), so an
+// instance-level lock can't prevent two concurrent requests for the same directory (e.g.
+// GitPanel's status()+log() firing in parallel) from both seeing "no .git yet" and both
+// calling `git init` at once — `git init`'s template-copy step then fails with "File exists"
+// on whichever loses the race. Keyed module-level lock so concurrent callers for the same
+// repoDir await one shared init instead of racing.
+const initLocks = new Map<string, Promise<void>>();
+
 /** Local-only git operations (status/diff/log/blame/stage/commit) scoped to one workspace
  * condition directory. No branching/merge/push/pull — that wasn't asked for. */
 export class GitService {
@@ -72,6 +80,17 @@ export class GitService {
    * on — and let staging/committing touch — the outer project repo instead of an isolated
    * per-workspace one. */
   async ensureRepo(): Promise<void> {
+    const existingInit = initLocks.get(this.repoDir);
+    if (existingInit) return existingInit;
+
+    const initPromise = this.doEnsureRepo().finally(() => {
+      initLocks.delete(this.repoDir);
+    });
+    initLocks.set(this.repoDir, initPromise);
+    return initPromise;
+  }
+
+  private async doEnsureRepo(): Promise<void> {
     await fs.mkdir(this.repoDir, { recursive: true });
     const hasOwnGitDir = await fs.access(path.join(this.repoDir, '.git')).then(() => true).catch(() => false);
     if (hasOwnGitDir) return;

@@ -185,6 +185,23 @@ export const gitApi = {
     request('/git/commit-message', { method: 'POST', body: JSON.stringify({ condition }) }),
 };
 
+// AI-assisted inline editing: Explain / Refactor / Fix / ghost-text completion — all
+// single-shot, no-tool LLM calls scoped to the given code, not routed through the
+// conversational agent/session pipeline.
+export const aiApi = {
+  explain: (code: string, language?: string): Promise<{ explanation: string }> =>
+    request('/ai/explain', { method: 'POST', body: JSON.stringify({ code, language }) }),
+
+  refactor: (code: string, language?: string): Promise<{ refactored: string }> =>
+    request('/ai/refactor', { method: 'POST', body: JSON.stringify({ code, language }) }),
+
+  fix: (code: string, language: string | undefined, diagnostic: { message: string; line: number }): Promise<{ fixed: string }> =>
+    request('/ai/fix', { method: 'POST', body: JSON.stringify({ code, language, diagnostic }) }),
+
+  complete: (prefix: string, suffix: string | undefined, language?: string): Promise<{ completion: string }> =>
+    request('/ai/complete', { method: 'POST', body: JSON.stringify({ prefix, suffix, language }) }),
+};
+
 // Telemetry
 export interface ExperimentMetrics {
   sessionId: string;

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
   RefreshCw, ChevronDown, X, Lock, ChevronsLeft, ChevronsRight,
-  LayoutPanelLeft, MessageSquare, Code2, Users, Plug, GitBranch,
+  LayoutPanelLeft, MessageSquare, Code2, Users, Plug, GitBranch, Settings2,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { GateStepper } from '@/components/panels/GateStepper';
@@ -24,10 +24,12 @@ import { MonacoEditor } from '@/components/editor/MonacoEditor';
 import { FileSearchModal } from '@/components/FileSearchModal';
 import { CommandPaletteModal } from '@/components/CommandPaletteModal';
 import { StatusBar } from '@/components/StatusBar';
+import { SettingsPanel } from '@/components/SettingsPanel';
 import { useAgentStore } from '@/lib/stores/agentStore';
 import { useConfigStore } from '@/lib/stores/configStore';
 import { useSessionStore } from '@/lib/stores/sessionStore';
 import { useTelemetryStore } from '@/lib/stores/telemetryStore';
+import { usePreferencesStore } from '@/lib/stores/preferencesStore';
 import { filesApi } from '@/lib/api/client';
 import type { ExperimentalCondition } from '@agent_design/shared/types';
 import { EXPERIMENTAL_CONDITIONS } from '@agent_design/shared/constants';
@@ -60,6 +62,7 @@ export default function WorkbenchPage() {
   const [rightTab, setRightTab] = useState<RightTab>('telemetry');
   const [showAgentManager, setShowAgentManager] = useState(false);
   const [showProviderManager, setShowProviderManager] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showConditionMenu, setShowConditionMenu] = useState(false);
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -70,24 +73,29 @@ export default function WorkbenchPage() {
   const [loadingFile, setLoadingFile] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalSize, setTerminalSize] = useState<{ width: number; height: number } | null>(null);
-  const [leftWidth, setLeftWidth] = useState(240);
-  const [rightWidth, setRightWidth] = useState(224);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
 
   const { agents, fetchAgents } = useAgentStore();
   const { setCondition, sessionId } = useConfigStore();
   const { getActiveSession, activeCondition } = useSessionStore();
   const session = getActiveSession();
   const { setCondition: setTelemetryCondition } = useTelemetryStore();
+  const {
+    leftWidth, setLeftWidth, rightWidth, setRightWidth,
+    leftCollapsed, setLeftCollapsed, rightCollapsed, setRightCollapsed,
+    defaultShowTerminal,
+  } = usePreferencesStore();
 
   const [isMounted, setIsMounted] = useState(false);
   const isAnyFileDirty = Object.values(dirtyByPath).some(Boolean);
 
-  // Hydrate agents on mount
+  // Hydrate agents on mount; seed terminal visibility from the persisted preference.
+  // Deliberately runs once on mount only (fetchAgents is a stable store action) — re-adding
+  // defaultShowTerminal to the deps would re-open/close the terminal on every preference
+  // change, not just on load.
   useEffect(() => {
     void fetchAgents();
     setIsMounted(true);
+    setShowTerminal(defaultShowTerminal);
   }, [fetchAgents]);
 
   // Warn on tab close/refresh with unsaved editor changes.
@@ -290,6 +298,18 @@ export default function WorkbenchPage() {
           >
             <Users size={12} />
             Agents ({agents.length})
+          </button>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            title="Settings"
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono transition-colors',
+              showSettings
+                ? 'bg-accent/20 text-accent border border-accent/30'
+                : 'text-gray-500 hover:text-gray-300 border border-surface-overlay',
+            )}
+          >
+            <Settings2 size={12} />
           </button>
         </div>
       </header>
@@ -561,6 +581,32 @@ export default function WorkbenchPage() {
         </div>
       )}
 
+      {/* ── Settings overlay ─────────────────────────────────────────────── */}
+      {showSettings && (
+        <div className="fixed inset-0 z-40 flex">
+          {/* Backdrop */}
+          <div
+            className="flex-1 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowSettings(false)}
+          />
+          {/* Panel slides in from right */}
+          <div className="w-[480px] flex flex-col border-l border-surface-overlay bg-surface-raised shadow-2xl">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-surface-overlay">
+              <span className="text-sm font-mono text-gray-300">Settings</span>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="text-gray-600 hover:text-white transition-colors text-xs font-mono"
+              >
+                Close ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <SettingsPanel />
+            </div>
+          </div>
+        </div>
+      )}
+
       {showTerminal && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50">
           <div
@@ -619,8 +665,8 @@ export default function WorkbenchPage() {
         <CommandPaletteModal
           commands={[
             { id: 'toggle-terminal', label: 'Toggle Terminal', category: 'View', action: () => setShowTerminal((v) => !v) },
-            { id: 'toggle-left', label: 'Toggle Left Sidebar', category: 'View', action: () => setLeftCollapsed((v) => !v) },
-            { id: 'toggle-right', label: 'Toggle Right Panel', category: 'View', action: () => setRightCollapsed((v) => !v) },
+            { id: 'toggle-left', label: 'Toggle Left Sidebar', category: 'View', action: () => setLeftCollapsed(!leftCollapsed) },
+            { id: 'toggle-right', label: 'Toggle Right Panel', category: 'View', action: () => setRightCollapsed(!rightCollapsed) },
             { id: 'tab-chat', label: 'Switch to Chat', category: 'Navigate', action: () => setCenterTab('chat') },
             { id: 'tab-editor', label: 'Switch to Editor', category: 'Navigate', action: () => setCenterTab('editor') },
             { id: 'sidebar-files', label: 'Show Files', category: 'Navigate', action: () => setSidebarTab('files') },

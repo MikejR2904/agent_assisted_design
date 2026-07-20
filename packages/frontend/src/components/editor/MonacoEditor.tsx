@@ -3,8 +3,12 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { Save, Loader2, Lock, RefreshCw, History } from 'lucide-react';
-import { filesApi, lintApi, gitApi, type GitBlameLine } from '@/lib/api/client';
+import { filesApi, lintApi, gitApi, aiApi, type GitBlameLine } from '@/lib/api/client';
 import { useTelemetryStore } from '@/lib/stores/telemetryStore';
+import { usePreferencesStore } from '@/lib/stores/preferencesStore';
+import { AIExplainModal } from '@/components/AIExplainModal';
+import { AISuggestionModal } from '@/components/AISuggestionModal';
+import { registerEditorAI, unregisterEditorAI, ensureAIProvidersRegistered } from './aiMonacoProviders';
 import { clsx } from 'clsx';
 
 // Dynamically import Monaco to avoid SSR issues
@@ -67,7 +71,11 @@ export function MonacoEditor({
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
+  const modelUriRef = useRef<string | null>(null);
   const { condition } = useTelemetryStore();
+  const { fontSize, tabSize, wordWrap, minimap, autoSave, autoSaveDelayMs, aiInlineCompletion } = usePreferencesStore();
+  const aiInlineCompletionRef = useRef(aiInlineCompletion);
+  useEffect(() => { aiInlineCompletionRef.current = aiInlineCompletion; }, [aiInlineCompletion]);
 
   const language = getLanguage(filePath);
   const filename = filePath.split('/').pop() ?? filePath;
@@ -139,6 +147,14 @@ export function MonacoEditor({
     }
   }, [condition, filePath]);
 
+  // Auto-save: just a different trigger for the exact same handleSave path (same
+  // save-status pill, same lint-on-save) — not a separate code path.
+  useEffect(() => {
+    if (!autoSave || !isDirty || readOnly) return;
+    const timer = setTimeout(() => { void handleSave(); }, autoSaveDelayMs);
+    return () => clearTimeout(timer);
+  }, [autoSave, autoSaveDelayMs, isDirty, readOnly, handleSave]);
+
   const handleReload = useCallback(async () => {
     if (!condition) return;
     setIsLoading(true);
@@ -196,6 +212,41 @@ export function MonacoEditor({
   }, [blameEnabled, condition, filePath, language]);
 
   useEffect(() => () => hoverDisposableRef.current?.dispose(), []);
+  useEffect(() => () => {
+    if (modelUriRef.current) unregisterEditorAI(modelUriRef.current);
+  }, []);
+
+  // AI: Explain / Refactor / Fix — single-shot, no-tool LLM calls (see ai.routes.ts), not
+  // routed through the conversational agent/session pipeline.
+  const [explainState, setExplainState] = useState<{ text: string | null; loading: boolean } | null>(null);
+  const [suggestion, setSuggestion] = useState<{
+    title: string;
+    original: string;
+    modified: string | null;
+    loading: boolean;
+    range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
+  } | null>(null);
+
+  const handleFixWithAI = useCallback((marker: { message: string; startLineNumber: number; endLineNumber: number }) => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const startLine = Math.max(1, marker.startLineNumber - 3);
+    const endLine = Math.min(model.getLineCount(), marker.endLineNumber + 3);
+    const range = { startLineNumber: startLine, startColumn: 1, endLineNumber: endLine, endColumn: model.getLineMaxColumn(endLine) };
+    const code = model.getValueInRange(range);
+    setSuggestion({ title: `AI Fix: ${marker.message}`, original: code, modified: null, loading: true, range });
+    aiApi.fix(code, language, { message: marker.message, line: marker.startLineNumber })
+      .then(({ fixed }) => setSuggestion((prev) => (prev ? { ...prev, modified: fixed, loading: false } : prev)))
+      .catch((err) => { console.error('AI fix failed', err); setSuggestion(null); });
+  }, [language]);
+
+  const handleAcceptSuggestion = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || !suggestion?.modified) return;
+    editor.executeEdits('ai-suggestion', [{ range: suggestion.range, text: suggestion.modified }]);
+    setSuggestion(null);
+  }, [suggestion]);
 
   return (
     <div className="flex flex-col h-full bg-surface">
@@ -277,20 +328,69 @@ export function MonacoEditor({
             if (model) {
               onMetaChange?.({ eol: model.getEOL() === '\r\n' ? 'CRLF' : 'LF' });
             }
+
+            // AI: Explain + Refactor — editor.addAction is instance-scoped (unlike the
+            // language-level providers below), so no cross-tab registry is needed here;
+            // it surfaces automatically in the right-click menu and the command palette (F1).
+            editor.addAction({
+              id: 'ai-explain-selection',
+              label: 'AI: Explain Selection',
+              contextMenuGroupId: 'ai',
+              contextMenuOrder: 1,
+              run: (ed: any) => {
+                const sel = ed.getSelection();
+                const m = ed.getModel();
+                if (!sel || !m || sel.isEmpty()) return;
+                const code = m.getValueInRange(sel);
+                setExplainState({ text: null, loading: true });
+                aiApi.explain(code, language)
+                  .then(({ explanation }) => setExplainState({ text: explanation, loading: false }))
+                  .catch((err) => setExplainState({ text: `Error: ${(err as Error).message}`, loading: false }));
+              },
+            });
+            editor.addAction({
+              id: 'ai-refactor-selection',
+              label: 'AI: Refactor Selection',
+              contextMenuGroupId: 'ai',
+              contextMenuOrder: 2,
+              run: (ed: any) => {
+                const sel = ed.getSelection();
+                const m = ed.getModel();
+                if (!sel || !m || sel.isEmpty()) return;
+                const code = m.getValueInRange(sel);
+                setSuggestion({ title: 'AI Refactor', original: code, modified: null, loading: true, range: sel });
+                aiApi.refactor(code, language)
+                  .then(({ refactored }) => setSuggestion((prev) => (prev ? { ...prev, modified: refactored, loading: false } : prev)))
+                  .catch((err) => { console.error('AI refactor failed', err); setSuggestion(null); });
+              },
+            });
+
+            // AI: Fix (quick-fix lightbulb) + ghost-text completion — language-level global
+            // providers, registered once per language and routed to this instance via a
+            // model-URI-keyed registry (see aiMonacoProviders.ts for why).
+            if (model) {
+              modelUriRef.current = model.uri.toString();
+              ensureAIProvidersRegistered(monacoInstance, language);
+              registerEditorAI(modelUriRef.current, {
+                onFixDiagnostic: handleFixWithAI,
+                isInlineCompletionEnabled: () => aiInlineCompletionRef.current,
+                isReadOnly: () => readOnly,
+              });
+            }
           }}
           options={{
             readOnly,
-            minimap: { enabled: true },
+            minimap: { enabled: minimap },
             quickSuggestions: true,
             parameterHints: { enabled: true },
-            fontSize: 13,
+            fontSize,
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
             fontLigatures: true,
-            lineHeight: 20,
-            tabSize: 2,
+            lineHeight: Math.round(fontSize * 1.54),
+            tabSize,
             scrollBeyondLastLine: false,
             renderWhitespace: 'selection',
-            wordWrap: 'on',
+            wordWrap,
             padding: { top: 12, bottom: 12 },
             glyphMargin: false,
             folding: true,
@@ -314,6 +414,26 @@ export function MonacoEditor({
             Read-only — this file is locked (Golden Config)
           </span>
         </div>
+      )}
+
+      {explainState && (
+        <AIExplainModal
+          explanation={explainState.text}
+          isLoading={explainState.loading}
+          onClose={() => setExplainState(null)}
+        />
+      )}
+
+      {suggestion && (
+        <AISuggestionModal
+          title={suggestion.title}
+          original={suggestion.original}
+          modified={suggestion.modified}
+          isLoading={suggestion.loading}
+          language={language}
+          onAccept={handleAcceptSuggestion}
+          onClose={() => setSuggestion(null)}
+        />
       )}
     </div>
   );
