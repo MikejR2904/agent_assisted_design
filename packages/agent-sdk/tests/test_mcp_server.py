@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 from conftest import sample_definition, sample_task
 from mcp import Client
@@ -366,3 +368,60 @@ async def test_mcp_server_recovers_orchestration_policy_after_restart(tmp_path):
     )
     assert submitted.structured_content["orchestration"]["controller_id"] is not None
     assert approved.structured_content["orchestration"]["status"] == "approved"
+
+
+@pytest.mark.anyio
+async def test_mcp_server_classifies_version_from_structured_specification(
+    client: Client, tmp_path
+):
+    repository = tmp_path / "versioned-specification"
+    repository.mkdir()
+    for arguments in (
+        ["init"],
+        ["config", "user.name", "Test Designer"],
+        ["config", "user.email", "designer@example.test"],
+    ):
+        subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
+    (repository / "specification.yaml").write_text("version: 1.0.0\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "specification.yaml"], cwd=repository, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial specification"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+    )
+    specification = {
+        "version": "1.0.0",
+        "documents": [],
+        "requirements": [
+            {
+                "id": "REQ-READY",
+                "category": "interface",
+                "text": "Expose a ready signal.",
+                "source_refs": [
+                    {
+                        "document_id": "REQ-READY",
+                        "relative_path": "functional/requirements.md",
+                        "source_hash": "source-hash",
+                        "format": "md",
+                        "location": "line:1",
+                    }
+                ],
+            }
+        ],
+    }
+
+    response = await client.call_tool(
+        "classify_specification_version",
+        {
+            "repository_path": "versioned-specification",
+            "version": "1.0.0",
+            "specification": specification,
+            "dependency_graph": {"nodes": ["REQ-READY"], "edges": []},
+        },
+    )
+
+    assert response.structured_content["ok"] is True
+    assert response.structured_content["classification"]["recommended_bump"] == "major"

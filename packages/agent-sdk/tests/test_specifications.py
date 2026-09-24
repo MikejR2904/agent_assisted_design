@@ -248,3 +248,87 @@ def test_gate_one_detects_traceability_and_verifiability_then_persists_soft_lock
         "plans/plan-1.yaml",
     ]:
         assert (tmp_path / relative).is_file()
+
+
+def test_gate_one_counts_transitive_dependents_for_missing_requirement():
+    source = SourceRef(
+        document_id="REQ-FUNC-001",
+        relative_path="functional/requirements.md",
+        source_hash="source-hash",
+        format=DocumentFormat.MD,
+        location="line:1",
+    )
+    specification = UnifiedSpecification(
+        version="1.0.0",
+        documents=[],
+        requirements=[
+            RequirementEntry(
+                id="REQ-A",
+                category=SpecificationCategory.FUNCTIONAL,
+                text="A depends on an undefined requirement.",
+                source_refs=[source],
+                dependencies=["REQ-MISSING"],
+                acceptance_checks=["test-a"],
+            ),
+            RequirementEntry(
+                id="REQ-B",
+                category=SpecificationCategory.FUNCTIONAL,
+                text="B depends on A.",
+                source_refs=[source],
+                dependencies=["REQ-A"],
+                acceptance_checks=["test-b"],
+            ),
+            RequirementEntry(
+                id="REQ-C",
+                category=SpecificationCategory.FUNCTIONAL,
+                text="C depends on B.",
+                source_refs=[source],
+                dependencies=["REQ-B"],
+                acceptance_checks=["test-c"],
+            ),
+        ],
+    )
+
+    _graph, report = SpecificationGate().validate(specification, required_categories=set())
+
+    missing_dependency = next(
+        gap for gap in report.gaps if gap.locations == ["REQ-A", "REQ-MISSING"]
+    )
+    assert missing_dependency.blast_radius == 3
+
+
+def test_gate_one_version_preview_marks_existing_requirement_change_major():
+    source = SourceRef(
+        document_id="REQ-FUNC-001",
+        relative_path="functional/requirements.md",
+        source_hash="source-hash",
+        format=DocumentFormat.MD,
+        location="line:1",
+    )
+    previous = UnifiedSpecification(
+        version="1.0.0",
+        documents=[],
+        requirements=[
+            RequirementEntry(
+                id="REQ-FUNC-001",
+                category=SpecificationCategory.FUNCTIONAL,
+                text="Support one accumulator lane.",
+                source_refs=[source],
+            )
+        ],
+    )
+    current = previous.model_copy(
+        update={
+            "version": "2.0.0",
+            "requirements": [
+                previous.requirements[0].model_copy(
+                    update={"text": "Support two accumulator lanes."}
+                )
+            ],
+        }
+    )
+
+    change_kind, rationale = classify_version_change(previous, current)
+
+    assert change_kind.value == "major"
+    assert rationale == ["Existing requirement changed: REQ-FUNC-001 (text)."]

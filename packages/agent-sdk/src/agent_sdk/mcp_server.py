@@ -45,6 +45,8 @@ from .shared_state import (
     SharedSubstrateSnapshot,
 )
 from .specification_gate import (
+    DependencyGraph,
+    GapReport,
     Gate1ArtifactStore,
     SpecificationGate,
     UnifiedSpecification,
@@ -66,7 +68,7 @@ from .telemetry import (
 from .tools import InMemoryTaskToolExecutor
 
 SERVER_NAME = "agent-design-python-runtime"
-SERVER_VERSION = "0.13.0"
+SERVER_VERSION = "0.15.0"
 
 
 def _validation_errors(error: ValidationError) -> list[dict[str, Any]]:
@@ -752,8 +754,6 @@ def create_mcp_server(run_root: Path | None = None) -> MCPServer:
         """Persist Gate 1 handover artifacts only after explicit designer approval."""
 
         try:
-            from .specification_gate import DependencyGraph, GapReport
-
             parsed_spec = UnifiedSpecification.model_validate(specification)
             parsed_graph = DependencyGraph.model_validate(dependency_graph)
             parsed_report = GapReport.model_validate(gap_report)
@@ -908,11 +908,21 @@ def create_mcp_server(run_root: Path | None = None) -> MCPServer:
             return {"ok": False, "errors": [{"message": str(error), "type": type(error).__name__}]}
 
     @server.tool(name="classify_specification_version", structured_output=True)
-    async def classify_specification_version(repository_path: str, version: str) -> dict[str, Any]:
-        """Classify a candidate version from the scoped local Git diff."""
+    async def classify_specification_version(
+        repository_path: str,
+        version: str,
+        specification: dict[str, Any],
+        dependency_graph: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Classify from persisted structured snapshots, not changed path names."""
 
         try:
-            classification = versioning.classify(repository_for(repository_path), version)
+            classification = versioning.classify(
+                repository_for(repository_path),
+                version,
+                UnifiedSpecification.model_validate(specification),
+                DependencyGraph.model_validate(dependency_graph),
+            )
             return {"ok": True, "classification": classification.model_dump(mode="json")}
         except Exception as error:
             return {"ok": False, "errors": [{"message": str(error), "type": type(error).__name__}]}
@@ -929,8 +939,6 @@ def create_mcp_server(run_root: Path | None = None) -> MCPServer:
         """Create an approval-gated annotated local specification tag and lock record."""
 
         try:
-            from .specification_gate import DependencyGraph, GapReport
-
             record = versioning.create_lock(
                 repository_for(repository_path),
                 UnifiedSpecification.model_validate(specification),

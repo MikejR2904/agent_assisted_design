@@ -27,6 +27,38 @@ class VersionBump(StrEnum):
     PATCH = "patch"
 
 
+class StructuralSpecificationDiff(StrictModel):
+    """Deterministic ID- and edge-based comparison of two locked specifications."""
+
+    added_requirement_ids: list[str] = Field(default_factory=list)
+    removed_requirement_ids: list[str] = Field(default_factory=list)
+    modified_requirement_ids: list[str] = Field(default_factory=list)
+    changed_requirement_fields: dict[str, list[str]] = Field(default_factory=dict)
+    added_dependency_edges: list[tuple[str, str]] = Field(default_factory=list)
+    removed_dependency_edges: list[tuple[str, str]] = Field(default_factory=list)
+
+    @property
+    def has_breaking_change(self) -> bool:
+        return bool(
+            self.removed_requirement_ids
+            or self.modified_requirement_ids
+            or self.added_dependency_edges
+            or self.removed_dependency_edges
+        )
+
+
+class SpecificationSnapshotRecord(StrictModel):
+    """Content-addressed structured inputs retained with an approved version lock."""
+
+    schema_version: str = "specification-version-snapshot-v1"
+    version: str
+    tag_name: str
+    specification: UnifiedSpecification
+    dependency_graph: DependencyGraph
+    specification_digest: str
+    dependency_graph_digest: str
+
+
 class GitApproval(StrictModel):
     approved: bool
     approver_id: str = Field(min_length=1)
@@ -50,6 +82,7 @@ class VersionClassification(StrictModel):
     rationale: list[str] = Field(default_factory=list)
     changed_paths: list[str] = Field(default_factory=list)
     previous_tag: str | None = None
+    structural_diff: StructuralSpecificationDiff | None = None
 
 
 class SpecificationLockRecord(StrictModel):
@@ -67,6 +100,7 @@ class SpecificationLockRecord(StrictModel):
     created_at_utc: str
     gap_report_hash: str
     dependency_graph_hash: str
+    snapshot_digest: str
 
 
 class VariantWorktreeRecord(StrictModel):
@@ -184,35 +218,104 @@ class SpecificationVersionService:
     def __init__(self, lock_root: Path) -> None:
         self._lock_root = lock_root.resolve() / ".agent-git-locks"
         self._lock_root.mkdir(parents=True, exist_ok=True)
+        self._snapshots = self._lock_root / "specification-snapshots"
+        self._snapshots.mkdir(parents=True, exist_ok=True)
 
-    def classify(self, repository: GitRepositoryAdapter, version: str) -> VersionClassification:
+    def classify(
+        self,
+        repository: GitRepositoryAdapter,
+        version: str,
+        specification: UnifiedSpecification,
+        dependency_graph: DependencyGraph,
+    ) -> VersionClassification:
+        """Classify from persisted structured snapshots, never path-name keywords."""
+
         _parse_semver(version)
         state = repository.state()
         previous_tag = state.tags[-1] if state.tags else None
         changed = repository.diff_names(previous_tag) if previous_tag else repository.diff_names()
-        lowered = "\n".join(changed).lower()
-        major_terms = ("architecture", "interface", "schema", "process", "objective")
-        minor_terms = ("requirement", "feature", "block", "capability")
-        if any(term in lowered for term in major_terms):
+        if previous_tag is None:
             return VersionClassification(
                 recommended_bump=VersionBump.MAJOR,
-                rationale=["Git diff contains a major-change keyword in a specification path."],
+                rationale=["Initial approved specification baseline."],
                 changed_paths=changed,
                 previous_tag=previous_tag,
             )
-        if any(term in lowered for term in minor_terms):
+        previous = self._load_snapshot(previous_tag)
+        diff = structural_specification_diff(
+            previous.specification,
+            previous.dependency_graph,
+            specification,
+            dependency_graph,
+        )
+        if diff.has_breaking_change:
             return VersionClassification(
-                recommended_bump=VersionBump.MINOR,
-                rationale=["Git diff contains an additive-change keyword in a specification path."],
+                recommended_bump=VersionBump.MAJOR,
+                rationale=_major_rationale(diff),
                 changed_paths=changed,
                 previous_tag=previous_tag,
+                structural_diff=diff,
             )
         return VersionClassification(
-            recommended_bump=VersionBump.PATCH,
-            rationale=["No configured major/minor Git-diff keyword was observed."],
+            recommended_bump=(
+                VersionBump.MINOR if diff.added_requirement_ids else VersionBump.PATCH
+            ),
+            rationale=(
+                [f"New requirements added: {', '.join(diff.added_requirement_ids)}."]
+                if diff.added_requirement_ids
+                else ["No breaking structural change or requirement addition was observed."]
+            ),
             changed_paths=changed,
             previous_tag=previous_tag,
+            structural_diff=diff,
         )
+
+    def _snapshot_path(self, tag_name: str) -> Path:
+        if not re.fullmatch(r"v" + _SEMVER.pattern[1:-1], tag_name):
+            raise ValueError("Specification snapshot tags must use vMAJOR.MINOR.PATCH.")
+        return self._snapshots / f"{tag_name}.snapshot.json"
+
+    def _load_snapshot(self, tag_name: str) -> SpecificationSnapshotRecord:
+        target = self._snapshot_path(tag_name)
+        if not target.is_file():
+            raise ValueError(
+                f'Previous tag "{tag_name}" has no persisted structured specification snapshot. '
+                "Create an explicitly approved baseline lock before automatic classification."
+            )
+        snapshot = SpecificationSnapshotRecord.model_validate_json(
+            target.read_text(encoding="utf-8")
+        )
+        if _sha256(snapshot.specification.model_dump(mode="json")) != snapshot.specification_digest:
+            raise ValueError("Persisted specification snapshot digest does not match its content.")
+        if (
+            _sha256(snapshot.dependency_graph.model_dump(mode="json"))
+            != snapshot.dependency_graph_digest
+        ):
+            raise ValueError(
+                "Persisted dependency graph snapshot digest does not match its content."
+            )
+        return snapshot
+
+    def _persist_snapshot(
+        self,
+        *,
+        tag_name: str,
+        version: str,
+        specification: UnifiedSpecification,
+        dependency_graph: DependencyGraph,
+        specification_digest: str,
+        dependency_graph_digest: str,
+    ) -> SpecificationSnapshotRecord:
+        snapshot = SpecificationSnapshotRecord(
+            version=version,
+            tag_name=tag_name,
+            specification=specification,
+            dependency_graph=dependency_graph,
+            specification_digest=specification_digest,
+            dependency_graph_digest=dependency_graph_digest,
+        )
+        _atomic_json(self._snapshot_path(tag_name), snapshot.model_dump(mode="json"))
+        return snapshot
 
     def create_lock(
         self,
@@ -240,7 +343,17 @@ class SpecificationVersionService:
         tag_name = f"v{metadata.version}"
         if repository.tag_exists(tag_name):
             raise ValueError(f'Specification tag "{tag_name}" already exists.')
-        classification = self.classify(repository, metadata.version)
+        classification = self.classify(
+            repository,
+            metadata.version,
+            specification,
+            dependency_graph,
+        )
+        if metadata.change_kind.value != classification.recommended_bump.value:
+            raise ValueError(
+                "Version metadata change_kind does not match the deterministic structural "
+                "classification."
+            )
         previous = (
             _parse_semver(classification.previous_tag[1:]) if classification.previous_tag else None
         )
@@ -252,6 +365,7 @@ class SpecificationVersionService:
                 f"{classification.recommended_bump.value} bump."
             )
         specification_digest = _sha256(specification.model_dump(mode="json"))
+        dependency_graph_digest = _sha256(dependency_graph.model_dump(mode="json"))
         if metadata.unified_specification_hash != specification_digest:
             raise ValueError(
                 "Version metadata unified_specification_hash does not match supplied specification."
@@ -260,6 +374,8 @@ class SpecificationVersionService:
             tag_name,
             f"Gate 1 soft-lock specification {metadata.version}; approval {approval.approval_id}",
         )
+        lock_target = self._lock_root / f"{metadata.version}.lock.json"
+        snapshot_target = self._snapshot_path(tag_name)
         try:
             record = SpecificationLockRecord(
                 version=metadata.version,
@@ -274,14 +390,28 @@ class SpecificationVersionService:
                 approval=approval,
                 created_at_utc=datetime.now(UTC).isoformat(),
                 gap_report_hash=_sha256(gap_report.model_dump(mode="json")),
-                dependency_graph_hash=_sha256(dependency_graph.model_dump(mode="json")),
+                dependency_graph_hash=dependency_graph_digest,
+                snapshot_digest=_sha256(
+                    {
+                        "specification_digest": specification_digest,
+                        "dependency_graph_digest": dependency_graph_digest,
+                    }
+                ),
             )
-            _atomic_json(
-                self._lock_root / f"{metadata.version}.lock.json", record.model_dump(mode="json")
+            self._persist_snapshot(
+                tag_name=tag_name,
+                version=metadata.version,
+                specification=specification,
+                dependency_graph=dependency_graph,
+                specification_digest=specification_digest,
+                dependency_graph_digest=dependency_graph_digest,
             )
+            _atomic_json(lock_target, record.model_dump(mode="json"))
             return record
         except Exception:
             repository.delete_tag(tag_name)
+            lock_target.unlink(missing_ok=True)
+            snapshot_target.unlink(missing_ok=True)
             raise
 
     def create_variant_worktree(
@@ -322,6 +452,59 @@ class SpecificationVersionService:
         )
         _atomic_json(self._lock_root / "worktrees" / f"{name}.json", record.model_dump(mode="json"))
         return record
+
+
+def structural_specification_diff(
+    previous: UnifiedSpecification,
+    previous_graph: DependencyGraph,
+    current: UnifiedSpecification,
+    current_graph: DependencyGraph,
+) -> StructuralSpecificationDiff:
+    """Compare stable requirement IDs and declared dependency edges exactly.
+
+    Source locators and acceptance-check metadata remain outside the breaking
+    surface. Their preservation is still verified by the Gate 1 lock digest.
+    """
+
+    previous_requirements = {requirement.id: requirement for requirement in previous.requirements}
+    current_requirements = {requirement.id: requirement for requirement in current.requirements}
+    common = sorted(set(previous_requirements) & set(current_requirements))
+    changed_fields: dict[str, list[str]] = {}
+    for requirement_id in common:
+        prior = previous_requirements[requirement_id]
+        present = current_requirements[requirement_id]
+        fields = [
+            field_name
+            for field_name in ("text", "category", "fields")
+            if getattr(prior, field_name) != getattr(present, field_name)
+        ]
+        if fields:
+            changed_fields[requirement_id] = fields
+
+    prior_edges = {(edge.source_id, edge.target_id) for edge in previous_graph.edges}
+    current_edges = {(edge.source_id, edge.target_id) for edge in current_graph.edges}
+    return StructuralSpecificationDiff(
+        added_requirement_ids=sorted(set(current_requirements) - set(previous_requirements)),
+        removed_requirement_ids=sorted(set(previous_requirements) - set(current_requirements)),
+        modified_requirement_ids=sorted(changed_fields),
+        changed_requirement_fields=changed_fields,
+        added_dependency_edges=sorted(current_edges - prior_edges),
+        removed_dependency_edges=sorted(prior_edges - current_edges),
+    )
+
+
+def _major_rationale(diff: StructuralSpecificationDiff) -> list[str]:
+    rationale: list[str] = []
+    if diff.removed_requirement_ids:
+        rationale.append(f"Requirements removed: {', '.join(diff.removed_requirement_ids)}.")
+    for requirement_id in diff.modified_requirement_ids:
+        fields = ", ".join(diff.changed_requirement_fields[requirement_id])
+        rationale.append(f"Existing requirement changed: {requirement_id} ({fields}).")
+    if diff.added_dependency_edges:
+        rationale.append("Dependency edges added to the locked specification graph.")
+    if diff.removed_dependency_edges:
+        rationale.append("Dependency edges removed from the locked specification graph.")
+    return rationale
 
 
 def _parse_semver(value: str) -> tuple[int, int, int]:

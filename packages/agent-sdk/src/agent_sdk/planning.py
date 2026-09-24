@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import Field, field_validator, model_validator
 
 from .contracts import StrictModel
+from .dependency_graph import deterministic_cycles
 from .shared_state import DiscoveryRoutingRefs
 
 
@@ -324,27 +325,19 @@ class PlanValidator:
     def _validate_cycles(
         dependencies: dict[str, set[str]], errors: list[PlanValidationError]
     ) -> None:
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(task_id: str, trail: list[str]) -> None:
-            if task_id in visiting:
-                cycle_start = trail.index(task_id)
-                errors.append(
-                    PlanValidationError(
-                        code="DEPENDENCY_CYCLE",
-                        message="The recomputed task graph contains a dependency cycle.",
-                        task_ids=trail[cycle_start:] + [task_id],
-                    )
-                )
-                return
-            if task_id in visited:
-                return
-            visiting.add(task_id)
-            for parent in sorted(dependencies[task_id]):
-                visit(parent, [*trail, task_id])
-            visiting.remove(task_id)
-            visited.add(task_id)
-
-        for task_id in sorted(dependencies):
-            visit(task_id, [])
+        cycles = deterministic_cycles(
+            dependencies,
+            [
+                (task_id, dependency)
+                for task_id, task_dependencies in dependencies.items()
+                for dependency in task_dependencies
+            ],
+        )
+        errors.extend(
+            PlanValidationError(
+                code="DEPENDENCY_CYCLE",
+                message="The recomputed task graph contains a dependency cycle.",
+                task_ids=cycle,
+            )
+            for cycle in cycles
+        )

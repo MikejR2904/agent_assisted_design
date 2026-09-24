@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-design-agent-sdk"
-version = "0.14.0"
-description = "Extensible Python BaseAgent runtime, governed orchestration, deterministic controller, profiling, verification gates, and MCP harness for the Agent-Assisted Design framework"
+version = "0.15.0"
+description = "Extensible Python BaseAgent runtime, grounded retrieval, governed orchestration, deterministic controller, profiling, verification gates, and MCP harness for the Agent-Assisted Design framework"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -47,6 +47,9 @@ langchain = [
 ]
 jev = [
     "typesafe-sdk>=0.7,<1",
+]
+redis-cache = [
+    "redis>=5,<7",
 ]
 interop = [
     "langchain>=1.2,<2",

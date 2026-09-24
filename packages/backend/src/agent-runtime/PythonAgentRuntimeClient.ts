@@ -433,10 +433,17 @@ export class PythonAgentRuntimeClient {
     return this.callPythonTool('get_git_repository_state', { repository_path: repositoryPath });
   }
 
-  async classifySpecificationVersion(repositoryPath: string, version: string): Promise<PythonAgentRuntimeResponse> {
+  async classifySpecificationVersion(
+    repositoryPath: string,
+    version: string,
+    specification: JsonObject,
+    dependencyGraph: JsonObject,
+  ): Promise<PythonAgentRuntimeResponse> {
     return this.callPythonTool('classify_specification_version', {
       repository_path: repositoryPath,
       version,
+      specification,
+      dependency_graph: dependencyGraph,
     });
   }
 

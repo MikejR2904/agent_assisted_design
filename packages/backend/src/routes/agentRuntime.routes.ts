@@ -116,6 +116,8 @@ const RepositoryQuerySchema = z.object({ repositoryPath: z.string().min(1) });
 const VersionClassificationRequestSchema = z.object({
   repositoryPath: z.string().min(1),
   version: z.string().min(1),
+  specification: JsonObjectSchema,
+  dependencyGraph: JsonObjectSchema,
 });
 const GitLockRequestSchema = z.object({
   repositoryPath: z.string().min(1),
@@ -449,7 +451,14 @@ export function agentRuntimeRouter(client?: PythonAgentRuntimeClient): Router {
   router.post('/git-repositories/classify-version', async (req, res, next) => {
     const parsed = VersionClassificationRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
-    try { res.json(await runtime.classifySpecificationVersion(parsed.data.repositoryPath, parsed.data.version)); } catch (error) { next(error); }
+    try {
+      res.json(await runtime.classifySpecificationVersion(
+        parsed.data.repositoryPath,
+        parsed.data.version,
+        parsed.data.specification,
+        parsed.data.dependencyGraph,
+      ));
+    } catch (error) { next(error); }
   });
 
   router.post('/git-repositories/specification-locks', async (req, res, next) => {

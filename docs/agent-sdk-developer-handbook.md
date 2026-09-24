@@ -1,6 +1,6 @@
 # Agent SDK Developer Handbook
 
-**Status:** Package `agent-design-agent-sdk` 0.14.0.
+**Status:** Package `agent-design-agent-sdk` 0.15.0.
 **Audience:** Engineers embedding the SDK in a Python application, extending its governed tools, implementing provider adapters, or maintaining the Python/MCP runtime.
 
 ## 1. What the SDK is responsible for
@@ -265,7 +265,44 @@ data payload cannot safely convey executable callbacks or credentials. Policy an
 record data persist under `.agent-orchestrations/` and may be recovered after restart;
 the host must explicitly re-register bindings before execution resumes.[13] [14]
 
-## 14. Current integration limits
+## 14. Use provenance-grounded retrieval
+
+`GroundedRetrievalService` is the only SDK retrieval layer that may feed task
+context. It accepts a frozen snapshot identifier and a bounded category-filtered
+query, asks an index only for ranked `RetrievalCandidate` source references, and
+then resolves every reference against locally held `DocumentTree` objects. A
+candidate must match snapshot, category, document/node identifiers, source hash,
+and source location before `TaskAwareContextSelector.select_verified_retrieval_nodes()`
+can apply the ordinary stage matrix. The model never receives arbitrary vector-store
+payload text.[15] [16]
+
+`QdrantRetrievalIndex` is an optional host-local adapter. It uses snapshot and
+category payload filters and creates keyword indexes for those fields. The host supplies
+an `EmbeddingProvider`; no model, endpoint, or credential is serialized over MCP.
+`DeterministicLexicalRetrievalIndex` is the offline deterministic alternative used by
+tests. The [grounded retrieval and structural versioning guide](grounded-retrieval-and-versioning.md)
+contains the full data-flow and host pattern.[15] [17]
+
+`RedisRetrievalCache` is an optional TTL cache installed using the `redis-cache` extra.
+It stores only digest-keyed bounded `RetrievalResult` records. It must not be used for
+specification source truth, graph state, locks, approvals, telemetry, audit history,
+tool evidence, or raw source/query text. `RetrievalTelemetrySink` records digest-only
+outcomes and candidate/cache metrics when attached.[15]
+
+The Gate 1 missing-reference blast radius is a deterministic reverse-reachability
+calculation over `(dependent, prerequisite)` graph edges. It counts all transitive known
+dependents, excluding the missing root. Both Gate 1 and plan validation use the same
+sorted deterministic cycle traversal.[15] [18]
+
+`SpecificationVersionService` persists a structured content-addressed snapshot with an
+approved lock. It classifies subsequent versions by requirement IDs, existing
+requirement text/category/structured fields, and dependency edges—not changed filenames.
+Changed existing requirements, removed requirements, and edge changes are MAJOR; purely
+additive requirement IDs are MINOR; acceptance-check/source-reference-only changes are
+PATCH. Automatic classification refuses a pre-existing tag with no stored snapshot until
+an approved baseline lock exists.[15]
+
+## 15. Current integration limits
 
 The SDK has no selected real model provider, remote execution backend, SSH/Desktop/Sandbox connector, EDA binary, container/cgroup isolation, multi-process lock, external authenticated identity, or live RTL-to-GDSII benchmark corpus. It must not be presented as already providing those capabilities. The implemented PCKP benchmark is a frozen engineering fixture used to verify deterministic selection and compare it with the greedy baseline; it is not an ASIC-flow performance result.[5] [8]
 
@@ -298,3 +335,11 @@ The SDK has no selected real model provider, remote execution backend, SSH/Deskt
 [13]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/orchestrator.py "Implemented governed orchestration policy, lifecycle, binding, persistence, and dispatch"
 
 [14]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/mcp_server.py "Data-only persisted orchestration MCP lifecycle"
+
+[15]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/retrieval.py "Provenance-grounded retrieval contracts, cache boundary, Qdrant adapter, and telemetry sink"
+
+[16]: /home/ubuntu/upload/Agent-AssistedDesignFrameworkSystemsDesign-updated.pdf "Agent-Assisted Design Framework Systems Design, updated, pp. 22–23 and 38–39, source pointers, task-aware loading, traceability traversal, and blast radius"
+
+[17]: https://qdrant.tech/documentation/concepts/filtering/ "Qdrant filtering and payload-index documentation"
+
+[18]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/dependency_graph.py "Deterministic reverse reachability and cycle traversal"

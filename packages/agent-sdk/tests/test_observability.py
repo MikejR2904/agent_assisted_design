@@ -173,7 +173,7 @@ def test_git_soft_lock_captures_complete_clean_state_and_variant_worktree(tmp_pa
     specification = _specification()
     metadata = VersionMetadata(
         version="1.0.0",
-        change_kind=VersionChangeKind.PATCH,
+        change_kind=VersionChangeKind.MAJOR,
         unified_specification_hash=_hash(specification.model_dump(mode="json")),
         soft_locked=True,
     )

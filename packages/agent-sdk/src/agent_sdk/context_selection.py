@@ -124,3 +124,44 @@ class TaskAwareContextSelector:
         return SelectedContext(
             stage=stage, selected_document_ids=document_ids, nodes=nodes, selection_reasons=reasons
         )
+
+    def select_verified_retrieval_nodes(
+        self,
+        trees: list[DocumentTree],
+        stage: DesignStage,
+        verified_nodes: list[DocumentNode],
+    ) -> SelectedContext:
+        """Admit only locally verified retrieval references within the stage matrix.
+
+        A retrieval backend may rank candidates, but this method receives nodes
+        only after their document ID, node ID, and ``SourceRef`` hash/location
+        have matched the frozen local trees. It never consumes backend text.
+        """
+
+        allowed_categories = STAGE_CATEGORIES[stage]
+        allowed = {
+            (tree.document_id, node.node_id, node.source.source_hash, node.source.location)
+            for tree in trees
+            if tree.category in allowed_categories
+            for node in tree.nodes
+        }
+        selected = [
+            node
+            for node in verified_nodes
+            if (
+                node.source.document_id,
+                node.node_id,
+                node.source.source_hash,
+                node.source.location,
+            )
+            in allowed
+        ]
+        document_ids = sorted({node.source.document_id for node in selected})
+        return SelectedContext(
+            stage=stage,
+            selected_document_ids=document_ids,
+            nodes=selected,
+            selection_reasons={
+                document_id: ["verified-retrieval-reference"] for document_id in document_ids
+            },
+        )

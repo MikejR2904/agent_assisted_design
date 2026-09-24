@@ -16,6 +16,7 @@ import yaml
 from pydantic import Field, model_validator
 
 from .contracts import StrictModel
+from .dependency_graph import deterministic_cycles, reverse_reachable_count
 from .specifications import DocumentTree, SourceRef, SpecificationCategory
 
 
@@ -185,11 +186,27 @@ class SpecificationGate:
                             ),
                             severity=GapSeverity.CRITICAL,
                             source="dependency-graph-traversal",
-                            blast_radius=1,
                         )
                     )
         graph = DependencyGraph(nodes=sorted(requirement_ids), edges=edges)
-        cycles = self._cycles(graph)
+        graph_edges = [(edge.source_id, edge.target_id) for edge in graph.edges]
+        gaps = [
+            gap.model_copy(
+                update={
+                    "blast_radius": reverse_reachable_count(
+                        graph.nodes,
+                        graph_edges,
+                        gap.locations[-1],
+                    )
+                }
+            )
+            if gap.source == "dependency-graph-traversal"
+            and len(gap.locations) == 2
+            and gap.locations[-1] not in requirement_ids
+            else gap
+            for gap in gaps
+        ]
+        cycles = deterministic_cycles(graph.nodes, graph_edges)
         for cycle in cycles:
             gaps.append(
                 Gap(
@@ -235,56 +252,36 @@ class SpecificationGate:
             ),
         )
 
-    @staticmethod
-    def _cycles(graph: DependencyGraph) -> list[list[str]]:
-        dependencies: dict[str, list[str]] = {node: [] for node in graph.nodes}
-        for edge in graph.edges:
-            if edge.target_id in dependencies:
-                dependencies[edge.source_id].append(edge.target_id)
-        found: list[list[str]] = []
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(node: str, trail: list[str]) -> None:
-            if node in visiting:
-                start = trail.index(node)
-                found.append([*trail[start:], node])
-                return
-            if node in visited:
-                return
-            visiting.add(node)
-            for dependency in sorted(dependencies[node]):
-                visit(dependency, [*trail, node])
-            visiting.remove(node)
-            visited.add(node)
-
-        for node in sorted(dependencies):
-            visit(node, [])
-        return found
-
 
 def classify_version_change(
     previous: UnifiedSpecification | None,
     current: UnifiedSpecification,
 ) -> tuple[VersionChangeKind, list[str]]:
-    """Classify documented major/minor/patch triggers from explicit fields."""
+    """Preview structural requirement-ID changes before a graph-aware Git lock check.
+
+    ``SpecificationVersionService`` additionally compares dependency edges against
+    the prior persisted lock snapshot. This Gate 1 helper has no prior graph
+    parameter, so it deliberately classifies only requirement-level structure.
+    """
 
     if previous is None:
         return VersionChangeKind.MAJOR, ["Initial soft-locked specification baseline."]
     previous_requirements = {item.id: item for item in previous.requirements}
     current_requirements = {item.id: item for item in current.requirements}
-    major_keys = {"design_objective", "process_node", "architecture", "schema_version"}
+    removed = sorted(set(previous_requirements) - set(current_requirements))
+    if removed:
+        return VersionChangeKind.MAJOR, [f"Requirements removed: {', '.join(removed)}."]
     for requirement_id in sorted(set(previous_requirements) & set(current_requirements)):
         prior = previous_requirements[requirement_id]
         present = current_requirements[requirement_id]
-        changed = set(prior.fields) | set(present.fields)
-        if any(prior.fields.get(key) != present.fields.get(key) for key in changed & major_keys):
+        changed_fields = [
+            field_name
+            for field_name in ("text", "category", "fields")
+            if getattr(prior, field_name) != getattr(present, field_name)
+        ]
+        if changed_fields:
             return VersionChangeKind.MAJOR, [
-                f"Major specification field changed in {requirement_id}."
-            ]
-        if prior.category is SpecificationCategory.INTERFACE and prior.text != present.text:
-            return VersionChangeKind.MAJOR, [
-                f"Existing interface requirement changed in {requirement_id}."
+                f"Existing requirement changed: {requirement_id} ({', '.join(changed_fields)})."
             ]
     added = sorted(set(current_requirements) - set(previous_requirements))
     if added:
