@@ -8,6 +8,8 @@ framework, updated PDF, p. 50–51).
 
 from __future__ import annotations
 
+import functools
+import json
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -396,17 +398,37 @@ def validate_candidate_output(definition: AgentDefinition, output: Any) -> None:
 
 
 def _validate_json_schema(schema: dict[str, Any], label: str) -> None:
+    # Schema literals are static and constructed repeatedly (e.g. once per
+    # AgentDefinition built by a factory function), but meta-schema validation
+    # is expensive; memoize it by canonical content instead of re-running the
+    # full Draft 2020-12 meta-schema walk on identical input every time.
+    canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"), default=str)
     try:
-        Draft202012Validator.check_schema(schema)
+        _check_schema_cached(canonical)
     except SchemaError as error:
         raise ValueError(
             f"{label} is not a valid Draft 2020-12 JSON Schema: {error.message}"
         ) from error
 
 
+@functools.lru_cache(maxsize=512)
+def _check_schema_cached(canonical_schema: str) -> None:
+    Draft202012Validator.check_schema(json.loads(canonical_schema))
+
+
+@functools.lru_cache(maxsize=512)
+def _validator_for(canonical_schema: str) -> Draft202012Validator:
+    return Draft202012Validator(json.loads(canonical_schema))
+
+
 def _validate_instance(schema: dict[str, Any], instance: Any, label: str) -> None:
+    # Same rationale as _check_schema_cached: schema is typically a static,
+    # repeatedly-reused literal (a tool's input_schema, an agent's output_schema),
+    # but building a Validator (ref resolution, format registration) is expensive
+    # and was previously redone from scratch on every single tool call and turn.
+    canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"), default=str)
     try:
-        Draft202012Validator(schema).validate(instance)
+        _validator_for(canonical).validate(instance)
     except Exception as error:
         raise AgentSdkError(
             "SCHEMA_VALIDATION_FAILED",

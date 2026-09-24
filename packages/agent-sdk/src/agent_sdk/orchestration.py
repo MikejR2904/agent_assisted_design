@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -238,21 +239,108 @@ class ControllerStateMachine:
         self.record = self.record.model_copy(update={"events": [*self.record.events, event]})
 
 
+def _replace_with_retry(temporary: Path, target: Path, *, attempts: int = 5) -> None:
+    """Retry ``os.replace`` on a transient Windows ``PermissionError``.
+
+    Reproduced under a rapid multi-save stress test (record_node_result-style
+    back-to-back saves): another process -- most plausibly antivirus or a search
+    indexer -- can transiently hold an open handle on a just-written destination
+    file, making ``MoveFileEx``/``os.replace`` fail with WinError 5. Pre-existing
+    in this codebase's atomic-write pattern generally, not introduced by the
+    append-only event log above; fixed here because splitting persistence into
+    two files increases save() frequency's exposure to it. POSIX ``rename`` has
+    no equivalent failure mode.
+    """
+
+    for attempt in range(attempts):
+        try:
+            os.replace(temporary, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.01 * (attempt + 1))
+
+
 class ControllerStateStore:
-    """Atomically persist controller records for user-visible review and resume."""
+    """Atomically persist controller records for user-visible review and resume.
+
+    A naive "rewrite the whole record" save makes total bytes written across a
+    controller's lifetime O(n^2) in its event count, since every save re-serializes
+    the full history (measured: ~2x slower per save between 0 and 1000 events on an
+    events-only record). Event history is append-only on disk instead, mirroring
+    telemetry.py/audit_log.py's ledgers, so save() cost no longer grows with total
+    run history. ``ControllerRecord.events`` in memory is unaffected; only the
+    on-disk layout (a small mutable snapshot plus an append-only event log) changes,
+    and load() still returns a fully populated record.
+    """
 
     def __init__(self, root: Path) -> None:
         self._root = root.resolve() / ".agent-controllers"
         self._root.mkdir(parents=True, exist_ok=True)
+        self._persisted_event_counts: dict[str, int] = {}
 
     def save(self, record: ControllerRecord) -> None:
+        persisted = self._persisted_event_counts.get(record.controller_id)
+        if persisted is None:
+            persisted = self._existing_event_count(record.controller_id)
+        if len(record.events) < persisted:
+            # Fewer events than already on disk: this id's history restarted
+            # (e.g. a fresh ControllerStateMachine reusing an old controller_id).
+            # Rewrite the log rather than silently losing the new, shorter history.
+            self._write_events(record.controller_id, record.events)
+        elif len(record.events) > persisted:
+            self._append_events(record.controller_id, record.events[persisted:])
         target = self._root / f"{record.controller_id}.json"
         temporary = target.with_name(f".{target.name}.tmp")
-        temporary.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(temporary, target)
+        snapshot = record.model_copy(update={"events": []})
+        temporary.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
+        _replace_with_retry(temporary, target)
+        self._persisted_event_counts[record.controller_id] = len(record.events)
 
     def load(self, controller_id: str) -> ControllerRecord:
         target = self._root / f"{controller_id}.json"
         if not target.is_file():
             raise ValueError(f'Controller "{controller_id}" is unknown.')
-        return ControllerRecord.model_validate_json(target.read_text(encoding="utf-8"))
+        snapshot = ControllerRecord.model_validate_json(target.read_text(encoding="utf-8"))
+        events = self._read_events(controller_id)
+        record = snapshot.model_copy(update={"events": events})
+        self._persisted_event_counts[controller_id] = len(events)
+        return record
+
+    def _events_path(self, controller_id: str) -> Path:
+        return self._root / f"{controller_id}.events.jsonl"
+
+    def _append_events(self, controller_id: str, events: list[ControllerEvent]) -> None:
+        path = self._events_path(controller_id)
+        with path.open("a", encoding="utf-8") as handle:
+            for event in events:
+                handle.write(event.model_dump_json())
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    def _write_events(self, controller_id: str, events: list[ControllerEvent]) -> None:
+        path = self._events_path(controller_id)
+        temporary = path.with_name(f".{path.name}.tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            for event in events:
+                handle.write(event.model_dump_json())
+                handle.write("\n")
+        _replace_with_retry(temporary, path)
+
+    def _read_events(self, controller_id: str) -> list[ControllerEvent]:
+        path = self._events_path(controller_id)
+        if not path.is_file():
+            return []
+        with path.open(encoding="utf-8") as handle:
+            return [ControllerEvent.model_validate_json(line) for line in handle if line.strip()]
+
+    def _existing_event_count(self, controller_id: str) -> int:
+        # Only the count is needed here (to know where to resume appending), so
+        # count non-empty lines directly instead of parsing each into a model.
+        path = self._events_path(controller_id)
+        if not path.is_file():
+            return 0
+        with path.open(encoding="utf-8") as handle:
+            return sum(1 for line in handle if line.strip())

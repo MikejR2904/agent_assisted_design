@@ -48,15 +48,28 @@ class ArtifactStore:
     same bytes written by separate runs cannot overwrite historical attribution.
     """
 
+    # A host typically constructs one ArtifactStore per task/tool-dispatch rather
+    # than one per run, so the same resolved root is re-initialized repeatedly
+    # within one process. Each __init__ otherwise costs 5 filesystem round trips
+    # (1 resolve + 4 mkdir) regardless of whether anything actually changed; this
+    # cache makes repeat construction for an already-initialized root effectively
+    # free. Write sites still create their target's parent directory defensively,
+    # so this cannot silently skip directory creation a write depends on.
+    _initialized_roots: set[Path] = set()
+    _initialized_roots_lock = threading.Lock()
+
     def __init__(self, run_root: Path) -> None:
         self._root = run_root.resolve()
-        self._root.mkdir(parents=True, exist_ok=True)
         self._manifest_root = self._root / ".agent-artifacts"
         self._content_root = self._manifest_root / "content"
         self._occurrence_root = self._manifest_root / "occurrences"
-        self._manifest_root.mkdir(exist_ok=True)
-        self._content_root.mkdir(exist_ok=True)
-        self._occurrence_root.mkdir(exist_ok=True)
+        with self._initialized_roots_lock:
+            if self._root not in self._initialized_roots:
+                self._root.mkdir(parents=True, exist_ok=True)
+                self._manifest_root.mkdir(exist_ok=True)
+                self._content_root.mkdir(exist_ok=True)
+                self._occurrence_root.mkdir(exist_ok=True)
+                self._initialized_roots.add(self._root)
         self._lock = threading.RLock()
 
     @property

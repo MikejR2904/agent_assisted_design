@@ -28,6 +28,9 @@ from ..tools import ToolExecutor, ToolInvocationContext
 from ._utils import require_optional_module
 from .contracts import assert_sanitized_interop_value
 
+# Built once: see base_agent.py's identical rationale for caching this adapter.
+_AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
+
 
 class AsyncLangChainRunnable(Protocol):
     """Small structural surface shared by LangChain Runnables and chat models."""
@@ -76,7 +79,7 @@ class LangChainAgentModelAdapter:
         parsed = self._turn_parser(response, context)
         if isinstance(parsed, ModelTurnResponse):
             return parsed
-        return TypeAdapter(AgentTurn).validate_python(parsed)
+        return _AGENT_TURN_ADAPTER.validate_python(parsed)
 
 
 class LangChainSdkRunnable:
@@ -177,9 +180,9 @@ def parse_structured_sdk_turn(response: Any, _: ModelContext) -> AgentTurn:
     """Parse only a JSON-like structured SDK turn; prose/tool inference is disallowed."""
 
     if isinstance(response, Mapping):
-        return TypeAdapter(AgentTurn).validate_python(dict(response))
+        return _AGENT_TURN_ADAPTER.validate_python(dict(response))
     if hasattr(response, "model_dump"):
-        return TypeAdapter(AgentTurn).validate_python(response.model_dump(mode="json"))
+        return _AGENT_TURN_ADAPTER.validate_python(response.model_dump(mode="json"))
     raise TypeError("LangChain model response must be a structured SDK AgentTurn mapping.")
 
 

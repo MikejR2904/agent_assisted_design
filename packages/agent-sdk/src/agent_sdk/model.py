@@ -19,6 +19,9 @@ from .contracts import (
 from .errors import AgentSdkError
 from .project_state import ProjectStateView
 
+# Built once: see base_agent.py's identical rationale for caching this adapter.
+_AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
+
 
 @dataclass(frozen=True)
 class ProviderUsage:
@@ -87,8 +90,7 @@ class ScriptedModel:
     """Deterministic test adapter; never calls an external model provider."""
 
     def __init__(self, turns: Sequence[AgentTurn | dict[str, Any]]) -> None:
-        adapter = TypeAdapter(AgentTurn)
-        self._turns = [adapter.validate_python(turn) for turn in turns]
+        self._turns = [_AGENT_TURN_ADAPTER.validate_python(turn) for turn in turns]
         self.calls: list[ModelContext] = []
 
     async def next_turn(self, context: ModelContext) -> AgentTurn:

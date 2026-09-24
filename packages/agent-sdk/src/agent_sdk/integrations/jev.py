@@ -145,6 +145,8 @@ JevAnswer = Annotated[
     JevNoulAnswer | JevChoiceAnswer | JevScoreAnswer,
     Field(discriminator="type"),
 ]
+# Built once: see base_agent.py's identical rationale for caching this adapter.
+_JEV_ANSWER_ADAPTER: TypeAdapter[JevAnswer] = TypeAdapter(JevAnswer)
 
 
 class JevDecisionResult(StrictModel):
@@ -390,7 +392,7 @@ class JevAdvisoryVerificationGate:
         if isinstance(answer, JevNoulAnswer):
             parsed: JevAnswer = answer
         elif isinstance(answer, Mapping):
-            parsed = TypeAdapter(JevAnswer).validate_python(answer)
+            parsed = _JEV_ANSWER_ADAPTER.validate_python(answer)
         else:
             return _unavailable_decision(
                 self._policy.on_unavailable,
@@ -498,7 +500,7 @@ class JevExplorationAdvisor:
         if isinstance(answer, JevChoiceAnswer):
             parsed_choice: JevAnswer | None = answer
         elif isinstance(answer, Mapping):
-            parsed_choice = TypeAdapter(JevAnswer).validate_python(answer)
+            parsed_choice = _JEV_ANSWER_ADAPTER.validate_python(answer)
         else:
             parsed_choice = None
         if parsed_choice is not None:
@@ -612,7 +614,7 @@ class JevArchitectureRouter:
         if isinstance(answer, JevChoiceAnswer):
             parsed: JevAnswer | None = answer
         elif isinstance(answer, Mapping):
-            parsed = TypeAdapter(JevAnswer).validate_python(answer)
+            parsed = _JEV_ANSWER_ADAPTER.validate_python(answer)
         else:
             parsed = None
         if not isinstance(parsed, JevChoiceAnswer):
@@ -689,7 +691,7 @@ def _normalize_jev_response(
     if not isinstance(answer_payload, Mapping):
         answer_payload = _grouped_answers(payload)
     answers = {
-        str(question_id): TypeAdapter(JevAnswer).validate_python(answer)
+        str(question_id): _JEV_ANSWER_ADAPTER.validate_python(answer)
         for question_id, answer in dict(answer_payload).items()
     }
     _validate_answers_match_spec(answers, request.question_spec)

@@ -15,11 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
-from defusedxml import ElementTree
-from docx import Document
-from openpyxl import load_workbook
 from pydantic import Field, field_validator, model_validator
-from pypdf import PdfReader
 
 from .contracts import StrictModel
 
@@ -287,6 +283,8 @@ class SpecificationPreprocessor:
                 path.read_text(encoding="utf-8", errors="replace"), source, kind
             )
         if format_ is DocumentFormat.PDF:
+            from pypdf import PdfReader
+
             reader = PdfReader(str(path))
             nodes: list[DocumentNode] = []
             for index, page in enumerate(reader.pages, start=1):
@@ -311,6 +309,8 @@ class SpecificationPreprocessor:
                     )
             return nodes
         if format_ is DocumentFormat.DOCX:
+            from docx import Document
+
             document = Document(str(path))
             nodes = []
             image_index = 0
@@ -371,6 +371,8 @@ class SpecificationPreprocessor:
             DocumentFormat.SVG,
             DocumentFormat.DRAWIO,
         }:
+            from defusedxml import ElementTree
+
             tree = ElementTree.parse(path)
             root = tree.getroot()
             return [
@@ -451,6 +453,8 @@ class SpecificationPreprocessor:
                         content=list(csv.reader(file)),
                     )
                 ]
+        from openpyxl import load_workbook
+
         workbook = load_workbook(path, read_only=True, data_only=False)
         nodes = []
         for sheet in workbook.worksheets:

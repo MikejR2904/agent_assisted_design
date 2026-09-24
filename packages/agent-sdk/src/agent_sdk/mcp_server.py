@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mcp.server import MCPServer
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from mcp.server import MCPServer
 
 from .audit_log import AuditTranscriptStore
 from .base_agent import AgentWatchdogPolicy, BaseAgent
@@ -84,6 +86,11 @@ def _validation_errors(error: ValidationError) -> list[dict[str, Any]]:
 
 def create_mcp_server(run_root: Path | None = None) -> MCPServer:
     """Build the BaseAgent and typed harness MCP surface without a network listener."""
+
+    # Deferred: the mcp SDK import is expensive (~700ms, mostly its own versioned
+    # protocol-type schemas) and is only needed by callers that actually build a
+    # server, not by every `import agent_sdk`.
+    from mcp.server import MCPServer
 
     resolved_run_root = run_root or Path(os.environ.get("AGENT_RUNTIME_RUN_ROOT", ".agent-runtime"))
     coordinator = HarnessCoordinator(resolved_run_root)

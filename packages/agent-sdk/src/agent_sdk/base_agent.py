@@ -76,6 +76,12 @@ from .telemetry import (
 from .tools import ToolExecutor, ToolInvocationContext
 from .verification import VerificationGateRegistry
 
+# Built once: AgentTurn is a fixed discriminated-union type, so its validation
+# schema never changes. Rebuilding a TypeAdapter for it on every model turn
+# measurably dominated pipeline latency (see contracts.py's schema-check cache
+# for the same class of fix).
+_AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
+
 
 class CancellationToken(Protocol):
     def is_cancelled(self) -> bool: ...
@@ -719,7 +725,7 @@ class BaseAgent:
             next_continuation = continuation
             usage = None
         try:
-            return TypeAdapter(AgentTurn).validate_python(raw_turn), next_continuation, usage
+            return _AGENT_TURN_ADAPTER.validate_python(raw_turn), next_continuation, usage
         except ValidationError as error:
             raise AgentSdkError(
                 "MODEL_TURN_INVALID",
