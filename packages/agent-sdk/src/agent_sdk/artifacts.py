@@ -111,7 +111,7 @@ class ArtifactStore:
         return content.decode("utf-8")
 
     def get(self, artifact_id: str) -> ArtifactRecord | None:
-        path = self._manifest_root / f"{artifact_id}.json"
+        path = self._manifest_path(artifact_id)
         if not path.is_file():
             return None
         return ArtifactRecord.model_validate_json(path.read_text(encoding="utf-8"))
@@ -194,7 +194,7 @@ class ArtifactStore:
             manifest=manifest,
             occurrence_id=occurrence_id,
         )
-        canonical_path = self._manifest_root / f"{artifact_id}.json"
+        canonical_path = self._manifest_path(artifact_id)
         if not canonical_path.exists():
             self._atomic_write_bytes(
                 canonical_path, record.model_dump_json(indent=2).encode("utf-8")
@@ -207,6 +207,12 @@ class ArtifactStore:
 
     def _content_path(self, digest: str) -> Path:
         return self._content_root / digest
+
+    def _manifest_path(self, artifact_id: str) -> Path:
+        # `artifact_id` is content-addressed as "sha256:<hex>"; the colon is not a
+        # legal Windows filename character, so the on-disk name must be sanitized
+        # even though the logical artifact_id keeps its colon-bearing form.
+        return self._manifest_root / f"{_safe_name(artifact_id)}.json"
 
     def _resolve_relative(self, relative_path: str) -> Path:
         candidate = Path(relative_path)
@@ -224,3 +230,9 @@ class ArtifactStore:
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_bytes(content)
         os.replace(temporary, target)
+
+
+def _safe_name(value: str) -> str:
+    return "".join(
+        character if character.isalnum() or character in "-_." else "_" for character in value
+    )

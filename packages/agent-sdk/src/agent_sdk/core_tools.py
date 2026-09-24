@@ -88,7 +88,11 @@ class CoreToolServices:
     write_manifest: dict[str, Any] | None = None
     max_grep_files: int = 500
     max_grep_total_bytes: int = 4_000_000
-    max_grep_seconds: float = 2.0
+    # The regex sandbox spawns a fresh interpreter per call (see `_bounded_regex_search`),
+    # which must re-import this package before it can search a single line. Measured
+    # cold-start import cost is ~2.2s (dominated by the `mcp` SDK and `openpyxl`), so a
+    # deadline near that makes every legitimate call fail, not just adversarial patterns.
+    max_grep_seconds: float = 8.0
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()

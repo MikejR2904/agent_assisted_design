@@ -984,7 +984,25 @@ def create_mcp_server(run_root: Path | None = None) -> MCPServer:
     return server
 
 
-mcp = create_mcp_server()
+_default_server: MCPServer | None = None
+
+
+def __getattr__(name: str) -> Any:
+    """Construct the default MCP server lazily so importing this module has no side effect.
+
+    Building it eagerly at import time meant every ``import agent_sdk`` constructed a
+    full runtime (coordinator, telemetry store, audit store, project-state store) and
+    touched disk, regardless of whether the caller ever intended to run a server. External
+    tooling that looks up a module-level ``mcp`` object (for example ``mcp dev``/``mcp run``
+    style discovery) still finds one; it is just built on first access, not on import.
+    """
+
+    global _default_server
+    if name == "mcp":
+        if _default_server is None:
+            _default_server = create_mcp_server()
+        return _default_server
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def main() -> None:
@@ -992,7 +1010,7 @@ def main() -> None:
 
     host = os.environ.get("AGENT_RUNTIME_HOST", "127.0.0.1")
     port = int(os.environ.get("AGENT_RUNTIME_PORT", "8001"))
-    mcp.run(
+    create_mcp_server().run(
         transport="streamable-http",
         host=host,
         port=port,
