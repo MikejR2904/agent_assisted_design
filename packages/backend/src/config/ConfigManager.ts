@@ -45,6 +45,13 @@ function readEnvOverrides(): Record<string, unknown> {
   if (process.env.DOCKER_ENABLED) overrides.docker = { enabled: process.env.DOCKER_ENABLED === 'true' };
   if (process.env.DOCKER_IMAGE) overrides.docker = { ...overrides.docker, image: process.env.DOCKER_IMAGE };
   if (process.env.JWT_SECRET) overrides.auth = { jwtSecret: process.env.JWT_SECRET };
+  if (process.env.AGENT_RUNTIME_MCP_URL || process.env.AGENT_RUNTIME_REQUEST_TIMEOUT_MS) {
+    overrides.agentRuntime = {};
+    if (process.env.AGENT_RUNTIME_MCP_URL) overrides.agentRuntime.mcpUrl = process.env.AGENT_RUNTIME_MCP_URL;
+    if (process.env.AGENT_RUNTIME_REQUEST_TIMEOUT_MS) {
+      overrides.agentRuntime.requestTimeoutMs = parseInt(process.env.AGENT_RUNTIME_REQUEST_TIMEOUT_MS, 10);
+    }
+  }
 
   const paths: Record<string, string> = {};
   if (process.env.WORKSPACE_ROOT) paths.workspaceRoot = process.env.WORKSPACE_ROOT;

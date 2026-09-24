@@ -230,6 +230,51 @@ export const telemetryApi = {
     request(`/telemetry/experiment/${sessionId}/metrics`),
 };
 
+export interface RuntimeTelemetryRun {
+  run_id: string;
+  event_count: number;
+  started_at: string | null;
+  last_event_at: string | null;
+  statuses: Record<string, number>;
+  event_types: Record<string, number>;
+}
+
+export interface RuntimeTelemetryEvent {
+  event_id: string;
+  sequence: number;
+  event_type: string;
+  occurred_at_utc: string;
+  status: string;
+  severity: string;
+  context: { run_id: string; task_id?: string; agent_id?: string; node_id?: string; stage?: string };
+  actor: { kind: string; identifier: string; role?: string };
+  payload: Record<string, unknown>;
+}
+
+export interface RuntimeMetricObservation {
+  observation_id: string;
+  metric_id: string;
+  run_id: string;
+  value: number | null;
+  unit: string;
+  availability: 'available' | 'unavailable';
+  unavailable_reason?: string | null;
+}
+
+export const runtimeTelemetryApi = {
+  runs: (limit = 20): Promise<{ ok: boolean; runs: RuntimeTelemetryRun[] }> =>
+    request(`/agent-runtime/telemetry/runs?limit=${limit}`),
+  events: (runId: string, afterSequence = 0, limit = 30): Promise<{
+    ok: boolean;
+    events: RuntimeTelemetryEvent[];
+    integrity_chain_valid?: boolean;
+  }> => request(`/agent-runtime/telemetry/runs/${encodeURIComponent(runId)}/events?afterSequence=${afterSequence}&limit=${limit}`),
+  metrics: (runId: string): Promise<{ ok: boolean; metrics: RuntimeMetricObservation[] }> =>
+    request(`/agent-runtime/telemetry/runs/${encodeURIComponent(runId)}/metrics`),
+  report: (runId: string): Promise<{ ok: boolean; report: Record<string, unknown> }> =>
+    request(`/agent-runtime/telemetry/runs/${encodeURIComponent(runId)}/report`, { method: 'POST' }),
+};
+
 // Project
 export const projectsApi = {
   list: (): Promise<Project[]> => request<Project[]>('/projects'),

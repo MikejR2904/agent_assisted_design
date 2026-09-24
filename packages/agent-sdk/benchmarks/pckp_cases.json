@@ -1,0 +1,39 @@
+[
+  {
+    "case_id": "shared-prerequisite-density-trap",
+    "description": "A shared-prerequisite joint action outperforms a higher-density independent alternative.",
+    "problem": {
+      "token_budget": 9,
+      "items": [
+        {"item_id": "root", "token_cost": 2, "utility": 0},
+        {"item_id": "left", "token_cost": 3, "utility": 1, "prerequisites": ["root"]},
+        {"item_id": "right", "token_cost": 3, "utility": 1, "prerequisites": ["root"]},
+        {"item_id": "joint", "token_cost": 1, "utility": 10, "prerequisites": ["left", "right"]},
+        {"item_id": "alternative", "token_cost": 6, "utility": 11}
+      ]
+    }
+  },
+  {
+    "case_id": "mandatory-closure-infeasible",
+    "description": "Required evidence and its prerequisite exceed the declared context budget.",
+    "problem": {
+      "token_budget": 4,
+      "items": [
+        {"item_id": "source", "token_cost": 3, "utility": 1, "mandatory": true},
+        {"item_id": "action", "token_cost": 3, "utility": 2, "prerequisites": ["source"], "mandatory": true}
+      ]
+    }
+  },
+  {
+    "case_id": "rooted-forest-fast-path",
+    "description": "A rooted forest validates the exact dynamic-programming fast path.",
+    "problem": {
+      "token_budget": 4,
+      "items": [
+        {"item_id": "root", "token_cost": 1, "utility": 1},
+        {"item_id": "child-a", "token_cost": 2, "utility": 4, "prerequisites": ["root"]},
+        {"item_id": "child-b", "token_cost": 3, "utility": 5, "prerequisites": ["root"]}
+      ]
+    }
+  }
+]

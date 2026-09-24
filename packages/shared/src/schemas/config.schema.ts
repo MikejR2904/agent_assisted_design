@@ -25,6 +25,14 @@ export const AppConfigSchema = z.object({
     cacheTTL: z.number().int().min(0).default(60_000),
   }).default({}),
 
+  // The TypeScript backend calls the Python BaseAgent runtime through MCP.
+  // Loopback is the intentional first deployment boundary; public exposure and
+  // authentication need a separately reviewed transport-security design.
+  agentRuntime: z.object({
+    mcpUrl: z.string().url().default('http://127.0.0.1:8001/mcp'),
+    requestTimeoutMs: z.number().int().min(1_000).default(30_000),
+  }).default({}),
+
   eda: z.object({
     verilatorPath: z.string().optional(),
     openroadPath: z.string().optional(),

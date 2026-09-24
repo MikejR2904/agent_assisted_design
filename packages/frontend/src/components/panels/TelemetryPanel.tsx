@@ -4,7 +4,14 @@ import { useEffect, useState } from 'react';
 import { Activity, Cpu, Zap, Download, AlertCircle, Gauge, FlaskConical } from 'lucide-react';
 import { useTelemetryStore } from '../../lib/stores/telemetryStore';
 import { useAgentStore } from '../../lib/stores/agentStore';
-import { telemetryApi, type ExperimentMetrics } from '../../lib/api/client';
+import {
+  runtimeTelemetryApi,
+  telemetryApi,
+  type ExperimentMetrics,
+  type RuntimeMetricObservation,
+  type RuntimeTelemetryEvent,
+  type RuntimeTelemetryRun,
+} from '../../lib/api/client';
 import { clsx } from 'clsx';
 
 const statusColors = {
@@ -25,6 +32,10 @@ export function TelemetryPanel() {
   const { metrics, edaStatus, tokensByAgent, currentGate, condition, sessionId, latestPPA } = useTelemetryStore();
   const { agents } = useAgentStore();
   const [experimentMetrics, setExperimentMetrics] = useState<ExperimentMetrics | null>(null);
+  const [runtimeRun, setRuntimeRun] = useState<RuntimeTelemetryRun | null>(null);
+  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeTelemetryEvent[]>([]);
+  const [runtimeMetrics, setRuntimeMetrics] = useState<RuntimeMetricObservation[]>([]);
+  const [runtimeChainValid, setRuntimeChainValid] = useState<boolean | null>(null);
 
   const activeAgents = agents.filter((a) => a.status === 'thinking' || a.status === 'awaiting-approval');
 
@@ -36,6 +47,38 @@ export function TelemetryPanel() {
       return;
     }
     telemetryApi.experimentMetrics(sessionId).then(setExperimentMetrics).catch(() => setExperimentMetrics(null));
+  }, [sessionId, metrics]);
+
+  useEffect(() => {
+    let active = true;
+    runtimeTelemetryApi.runs(1)
+      .then(async ({ runs }) => {
+        const latest = runs[0] ?? null;
+        if (!active) return;
+        setRuntimeRun(latest);
+        if (!latest) {
+          setRuntimeEvents([]);
+          setRuntimeMetrics([]);
+          setRuntimeChainValid(null);
+          return;
+        }
+        const [events, metricResponse] = await Promise.all([
+          runtimeTelemetryApi.events(latest.run_id),
+          runtimeTelemetryApi.metrics(latest.run_id),
+        ]);
+        if (!active) return;
+        setRuntimeEvents(events.events);
+        setRuntimeMetrics(metricResponse.metrics);
+        setRuntimeChainValid(events.integrity_chain_valid ?? null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setRuntimeRun(null);
+        setRuntimeEvents([]);
+        setRuntimeMetrics([]);
+        setRuntimeChainValid(null);
+      });
+    return () => { active = false; };
   }, [sessionId, metrics]);
 
   const downloadTelemetry = () => {
@@ -165,6 +208,37 @@ export function TelemetryPanel() {
                 </>
               );
             })()}
+          </div>
+        </Section>
+      )}
+
+      {/* Python runtime trace/metric ledger: only observed structured facts, not hidden reasoning. */}
+      {runtimeRun && (
+        <Section title="Runtime Trace" icon={<Activity size={12} />}>
+          <div className="space-y-2">
+            <StatRow label="Run" value={runtimeRun.run_id} />
+            <StatRow label="Events" value={runtimeRun.event_count} />
+            <StatRow
+              label="Integrity"
+              value={runtimeChainValid === null ? 'checking' : runtimeChainValid ? 'verified' : 'invalid'}
+              color={runtimeChainValid === false ? 'text-error' : runtimeChainValid ? 'text-success' : 'text-warning'}
+            />
+            {runtimeMetrics.slice(0, 3).map((metric) => (
+              <StatRow
+                key={metric.observation_id}
+                label={metric.metric_id}
+                value={metric.availability === 'available' ? `${metric.value ?? '—'} ${metric.unit}` : 'unavailable'}
+                color={metric.availability === 'available' ? 'text-gray-300' : 'text-warning'}
+              />
+            ))}
+          </div>
+          <div className="mt-3 space-y-1">
+            {runtimeEvents.slice(-5).reverse().map((event) => (
+              <div key={event.event_id} className="text-xs font-mono text-gray-500 truncate" title={event.event_type}>
+                <span className={event.severity === 'error' ? 'text-error' : 'text-gray-400'}>{event.sequence}</span>
+                {' '}{event.event_type} · {event.status}
+              </div>
+            ))}
           </div>
         </Section>
       )}

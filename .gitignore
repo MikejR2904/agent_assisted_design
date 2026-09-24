@@ -18,3 +18,16 @@ workspaces/
 /rag_sources/*
 !/rag_sources/README.md
 
+# Python SDK environments, caches, build artifacts, and durable local run ledgers
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.agent-runs/
+.agent-runtime/
+.agent-orchestrations/
+.agent-telemetry/
+.agent-audit-logs/
+.agent-tool-results/
+.agent-project-state/

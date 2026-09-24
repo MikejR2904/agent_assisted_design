@@ -16,6 +16,7 @@
     "@agent_design/shared": "workspace:^1.0.0",
     "@anthropic-ai/sdk": "^0.26.0",
     "@google/generative-ai": "^0.15.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@microsoft/agents-m365copilot": "^1.6.0",
     "@microsoft/kiota-abstractions": "1.0.0-preview.103",
     "@microsoft/kiota-http-fetchlibrary": "workspace:*",
@@ -37,7 +38,7 @@
     "toml": "^3.0.0",
     "winston": "^3.13.0",
     "ws": "^8.18.0",
-    "zod": "^3.23.0"
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.10",

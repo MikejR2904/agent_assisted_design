@@ -14,6 +14,7 @@ import { authRouter } from './routes/auth.routes';
 import { lintRouter } from './routes/lint.routes';
 import { gitRouter } from './routes/git.routes';
 import { aiRouter } from './routes/ai.routes';
+import { agentRuntimeRouter } from './routes/agentRuntime.routes';
 import { TelemetryService } from './services/TelemetryService';
 import path from 'path';
 import type { Orchestrator } from './orchestrator/Orchestrator';
@@ -60,6 +61,7 @@ export function createApp(orchestrator?: Orchestrator): express.Application {
   app.use('/api/lint', lintRouter());
   app.use('/api/git', gitRouter());
   app.use('/api/ai', aiRouter());
+  app.use('/api/agent-runtime', agentRuntimeRouter());
 
   // Workspace routes (require orchestrator)
   if (orchestrator) {

@@ -1,0 +1,94 @@
+"""Private deterministic helpers shared by optional framework integrations."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib
+import json
+from typing import Any
+
+_FORBIDDEN_KEYS = {
+    "approval",
+    "approval_id",
+    "approval_token",
+    "api_key",
+    "apikey",
+    "audit",
+    "audit_log",
+    "authorization",
+    "capability",
+    "capability_token",
+    "cookie",
+    "credential",
+    "message",
+    "message_history",
+    "messages",
+    "password",
+    "private_key",
+    "raw_response",
+    "secret",
+    "token",
+    "tool_arguments",
+    "tool_result",
+    "tool_results",
+    "transcript",
+}
+_MAX_INTEROP_DEPTH = 16
+_MAX_INTEROP_LIST_ITEMS = 256
+_MAX_INTEROP_MAPPING_ENTRIES = 128
+_MAX_INTEROP_STRING_CHARS = 16_384
+
+
+def assert_sanitized_interop_value(value: Any, *, _depth: int = 0) -> None:
+    """Reject authority material and values unsafe for a framework boundary."""
+
+    if _depth > _MAX_INTEROP_DEPTH:
+        raise ValueError("Interoperability projection exceeds the maximum nesting depth.")
+    if value is None or isinstance(value, (int, float, bool)):
+        return
+    if isinstance(value, str):
+        if len(value) > _MAX_INTEROP_STRING_CHARS:
+            raise ValueError("Interoperability projection string exceeds the maximum length.")
+        return
+    if isinstance(value, list):
+        if len(value) > _MAX_INTEROP_LIST_ITEMS:
+            raise ValueError("Interoperability projection list exceeds the maximum size.")
+        for item in value:
+            assert_sanitized_interop_value(item, _depth=_depth + 1)
+        return
+    if isinstance(value, dict):
+        if len(value) > _MAX_INTEROP_MAPPING_ENTRIES:
+            raise ValueError("Interoperability projection object exceeds the maximum size.")
+        for key, item in value.items():
+            if len(str(key)) > 256:
+                raise ValueError("Interoperability projection key exceeds the maximum length.")
+            normalized = str(key).strip().lower().replace("-", "_")
+            if normalized in _FORBIDDEN_KEYS or "secret" in normalized:
+                raise ValueError(
+                    f'Unsafe key "{key}" is forbidden in an interoperability projection.'
+                )
+            assert_sanitized_interop_value(item, _depth=_depth + 1)
+        return
+    raise TypeError(
+        "Interoperability projections must contain JSON-compatible scalar, list, or dict values."
+    )
+
+
+def canonical_digest(value: Any) -> str:
+    """Return a SHA-256 digest after sanitization and canonical JSON encoding."""
+
+    assert_sanitized_interop_value(value)
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def require_optional_module(module_name: str, extra_name: str) -> Any:
+    """Load an optional dependency with a precise installation instruction."""
+
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            f'Optional dependency "{module_name}" is required; install '
+            f"agent-design-agent-sdk[{extra_name}]."
+        ) from error
