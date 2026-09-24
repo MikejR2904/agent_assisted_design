@@ -10,6 +10,9 @@ import asyncio
 import html
 import ipaddress
 import json
+import multiprocessing
+import os
+import queue
 import re
 import socket
 import urllib.error
@@ -82,12 +85,22 @@ class CoreToolServices:
     ask_human: HumanQuestionResponder | None = None
     max_read_bytes: int = 512_000
     max_web_chars: int = 20_000
+    write_manifest: dict[str, Any] | None = None
+    max_grep_files: int = 500
+    max_grep_total_bytes: int = 4_000_000
+    max_grep_seconds: float = 2.0
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()
         if not self.root.is_dir():
             raise ValueError("Core tool root must be an existing directory.")
-        if self.max_read_bytes < 1 or self.max_web_chars < 256:
+        if (
+            self.max_read_bytes < 1
+            or self.max_web_chars < 256
+            or self.max_grep_files < 1
+            or self.max_grep_total_bytes < 1
+            or self.max_grep_seconds <= 0
+        ):
             raise ValueError("Core tool read limits must be positive and safe.")
 
 
@@ -118,7 +131,7 @@ class CoreToolDispatcher:
             limit = _bounded_int(arguments.get("limit", 200), "limit", 1, 5_000)
             return {"matches": self._glob(pattern, limit), "limit": limit}
         if name == "grep":
-            return self._grep(arguments)
+            return await self._grep(arguments)
         if name == "write_draft":
             return self._write_draft(arguments)
         if name == "edit_draft":
@@ -175,34 +188,51 @@ class CoreToolDispatcher:
                 break
         return sorted(matches)
 
-    def _grep(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _grep(self, arguments: dict[str, Any]) -> dict[str, Any]:
         pattern = _required_text(arguments, "pattern")
         file_glob = str(arguments.get("file_glob", "**/*"))
         limit = _bounded_int(arguments.get("limit", 200), "limit", 1, 2_000)
         case_sensitive = bool(arguments.get("case_sensitive", True))
-        flags = 0 if case_sensitive else re.IGNORECASE
-        expression = re.compile(pattern, flags)
-        matches: list[dict[str, Any]] = []
-        for relative in self._glob(file_glob, 5_000):
+        documents, scan_truncated = await asyncio.to_thread(self._grep_documents, file_glob)
+        result = await asyncio.to_thread(
+            _bounded_regex_search,
+            pattern,
+            case_sensitive,
+            limit,
+            documents,
+            self._services.max_grep_seconds,
+        )
+        return {**result, "scan_truncated": scan_truncated}
+
+    def _grep_documents(self, file_glob: str) -> tuple[list[tuple[str, str]], bool]:
+        documents: list[tuple[str, str]] = []
+        total_bytes = 0
+        scan_truncated = False
+        for relative in self._glob(file_glob, self._services.max_grep_files):
             path = self._path(relative)
             if not path.is_file() or path.stat().st_size > self._services.max_read_bytes:
                 continue
+            size_bytes = path.stat().st_size
+            if total_bytes + size_bytes > self._services.max_grep_total_bytes:
+                scan_truncated = True
+                break
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
+                text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
-            for index, line in enumerate(lines, start=1):
-                if expression.search(line):
-                    matches.append({"path": relative, "line": index, "text": line[:1_000]})
-                    if len(matches) >= limit:
-                        return {"matches": matches, "truncated": True}
-        return {"matches": matches, "truncated": False}
+            total_bytes += size_bytes
+            documents.append((relative, text))
+        return documents, scan_truncated
 
     def _write_draft(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = _required_text(arguments, "path")
         if path not in self._services.declared_output_paths:
             raise ValueError("Draft path was not declared for this governed task.")
-        record = self._services.artifacts.write_text(path, _required_text(arguments, "content"))
+        record = self._services.artifacts.write_text(
+            path,
+            _required_text(arguments, "content"),
+            manifest=self._services.write_manifest,
+        )
         return record.model_dump(mode="json")
 
     def _edit_draft(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -224,7 +254,11 @@ class CoreToolDispatcher:
                 "edit_draft old_text is ambiguous; set replace_all only when intended."
             )
         updated = content.replace(old, new) if replace_all else content.replace(old, new, 1)
-        record = self._services.artifacts.write_text(path, updated)
+        record = self._services.artifacts.write_text(
+            path,
+            updated,
+            manifest=self._services.write_manifest,
+        )
         return {
             "replacements": count if replace_all else 1,
             "artifact": record.model_dump(mode="json"),
@@ -321,7 +355,11 @@ class CoreToolDispatcher:
         cell["source"] = (existing + source if mode == "append" else source).splitlines(
             keepends=True
         )
-        record = self._services.artifacts.write_text(path, json.dumps(document, indent=2))
+        record = self._services.artifacts.write_text(
+            path,
+            json.dumps(document, indent=2),
+            manifest=self._services.write_manifest,
+        )
         return {"cell_index": cell_index, "artifact": record.model_dump(mode="json")}
 
 
@@ -441,6 +479,7 @@ def core_tool_definitions() -> list[ToolDefinition]:
                 "properties": {
                     "base_artifact_id": {"type": "string"},
                     "draft_artifact_id": {"type": "string"},
+                    "draft_occurrence_id": {"type": "string"},
                 },
                 "required": ["base_artifact_id", "draft_artifact_id"],
                 "additionalProperties": False,
@@ -545,6 +584,69 @@ def core_tool_definitions() -> list[ToolDefinition]:
             write=True,
         ),
     ]
+
+
+def _bounded_regex_search(
+    pattern: str,
+    case_sensitive: bool,
+    limit: int,
+    documents: list[tuple[str, str]],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Run untrusted Python regex work in a killable child process.
+
+    Python's standard ``re`` engine permits backtracking constructs. Process isolation
+    preserves its documented syntax while making the configured deadline enforceable.
+    """
+
+    context = multiprocessing.get_context("forkserver" if os.name == "posix" else "spawn")
+    results: multiprocessing.Queue[dict[str, Any]] = context.Queue(maxsize=1)
+    worker = context.Process(
+        target=_regex_search_worker,
+        args=(results, pattern, case_sensitive, limit, documents),
+    )
+    worker.start()
+    worker.join(timeout_seconds)
+    if worker.is_alive():
+        worker.terminate()
+        worker.join(timeout=1)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=1)
+        raise ValueError("GREP_REGEX_TIMEOUT: regex search exceeded the governed deadline.")
+    try:
+        outcome = results.get(timeout=1)
+    except queue.Empty as error:
+        raise ValueError("GREP_REGEX_WORKER_FAILED: regex worker returned no result.") from error
+    if error_message := outcome.get("error"):
+        raise ValueError(f"GREP_REGEX_INVALID: {error_message}")
+    return {
+        "matches": outcome["matches"],
+        "truncated": bool(outcome["truncated"]),
+    }
+
+
+def _regex_search_worker(
+    results: multiprocessing.Queue[dict[str, Any]],
+    pattern: str,
+    case_sensitive: bool,
+    limit: int,
+    documents: list[tuple[str, str]],
+) -> None:
+    try:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        expression = re.compile(pattern, flags)
+        matches: list[dict[str, Any]] = []
+        for relative, text in documents:
+            for index, line in enumerate(text.splitlines(), start=1):
+                if expression.search(line):
+                    matches.append({"path": relative, "line": index, "text": line[:1_000]})
+                    if len(matches) >= limit:
+                        results.put({"matches": matches, "truncated": True})
+                        return
+        results.put({"matches": matches, "truncated": False})
+    except Exception as error:
+        results.put({"error": str(error)})
 
 
 def _fetch_public_text(url: str, max_chars: int) -> dict[str, Any]:

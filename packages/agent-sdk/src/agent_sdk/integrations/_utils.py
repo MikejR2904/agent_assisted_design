@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import re
 from typing import Any
 
 _FORBIDDEN_KEYS = {
@@ -33,10 +34,19 @@ _FORBIDDEN_KEYS = {
     "tool_results",
     "transcript",
 }
+_FORBIDDEN_COLLAPSED_KEYS = {key.replace("_", "") for key in _FORBIDDEN_KEYS}
 _MAX_INTEROP_DEPTH = 16
 _MAX_INTEROP_LIST_ITEMS = 256
 _MAX_INTEROP_MAPPING_ENTRIES = 128
 _MAX_INTEROP_STRING_CHARS = 16_384
+
+
+def _canonical_key(value: Any) -> str:
+    """Normalize snake, kebab, camel, case, and separator variants deterministically."""
+
+    token = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value).strip())
+    token = re.sub(r"[^A-Za-z0-9]+", "_", token).strip("_").lower()
+    return token
 
 
 def assert_sanitized_interop_value(value: Any, *, _depth: int = 0) -> None:
@@ -62,8 +72,12 @@ def assert_sanitized_interop_value(value: Any, *, _depth: int = 0) -> None:
         for key, item in value.items():
             if len(str(key)) > 256:
                 raise ValueError("Interoperability projection key exceeds the maximum length.")
-            normalized = str(key).strip().lower().replace("-", "_")
-            if normalized in _FORBIDDEN_KEYS or "secret" in normalized:
+            normalized = _canonical_key(key)
+            if (
+                normalized in _FORBIDDEN_KEYS
+                or normalized.replace("_", "") in _FORBIDDEN_COLLAPSED_KEYS
+                or "secret" in normalized
+            ):
                 raise ValueError(
                     f'Unsafe key "{key}" is forbidden in an interoperability projection.'
                 )

@@ -1,7 +1,7 @@
 """Python BaseAgent runtime and deterministic RTL-to-GDSII agent harness."""
 
 from .approvals import ApprovalRegistry, ApprovalRequest, ApprovalStatus
-from .artifacts import ArtifactRecord, ArtifactStore
+from .artifacts import ArtifactRecord, ArtifactStore, ArtifactWriteOccurrence
 from .audit_log import AuditLogEntry, AuditTranscriptStore
 from .base_agent import AgentWatchdogPolicy, BaseAgent, ToolHookDecision
 from .benchmarks import (
@@ -24,6 +24,7 @@ from .context_projection import (
 from .context_selection import DesignStage, SelectedContext, TaskAwareContextSelector
 from .contracts import (
     AgentDefinition,
+    AgentFailure,
     AgentResult,
     AgentRunStatus,
     ContextProjectionMetadata,
@@ -328,6 +329,7 @@ from .verification import (
 
 __all__ = [
     "AgentDefinition",
+    "AgentFailure",
     "AgentExecutionProfile",
     "AgentResult",
     "AgentRunProfile",
@@ -345,6 +347,7 @@ __all__ = [
     "ApprovalStatus",
     "ArtifactRecord",
     "ArtifactStore",
+    "ArtifactWriteOccurrence",
     "BaseAgent",
     "CapabilityGrant",
     "CapabilityPolicy",

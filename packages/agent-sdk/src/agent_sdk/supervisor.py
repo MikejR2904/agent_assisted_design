@@ -6,6 +6,7 @@ import asyncio
 import math
 import os
 import signal
+import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -183,8 +184,7 @@ class ProcessSupervisor:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-            preexec_fn=preexec,
+            **_subprocess_launch_options(preexec),
         )
         watchdog.emit(
             WatchdogState.STARTED,
@@ -242,7 +242,7 @@ class ProcessSupervisor:
             ended_at_utc=ended_at,
             duration_ns=max(0, monotonic_ns() - started_ns),
             pid=process.pid,
-            process_group_id=process.pid,
+            process_group_id=process.pid if os.name == "posix" else None,
             return_code=return_code,
             exit_signal=exit_signal,
             exit_kind=exit_kind,
@@ -273,11 +273,13 @@ class ProcessSupervisor:
     async def _terminate_process_group(process: asyncio.subprocess.Process) -> list[str]:
         if process.returncode is not None:
             return ["already-exited"]
+        if os.name == "nt":
+            return await _terminate_windows_process_tree(process)
         termination_path: list[str] = []
         try:
             os.killpg(process.pid, signal.SIGTERM)
             termination_path.append("SIGTERM")
-        except ProcessLookupError:
+        except (OSError, ProcessLookupError):
             return ["process-not-found"]
         try:
             await asyncio.wait_for(process.wait(), timeout=1)
@@ -285,10 +287,53 @@ class ProcessSupervisor:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
                 termination_path.append("SIGKILL")
-            except ProcessLookupError:
+            except (OSError, ProcessLookupError):
                 return termination_path
             await process.wait()
         return termination_path
+
+
+def _subprocess_launch_options(preexec: Callable[[], None] | None) -> dict[str, Any]:
+    """Return launch options supported by the active platform only."""
+
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True, "preexec_fn": preexec}
+
+
+async def _terminate_windows_process_tree(process: asyncio.subprocess.Process) -> list[str]:
+    """Terminate a Windows process tree and always return an auditable outcome.
+
+    ``taskkill /T /F`` is used through an argument vector and includes descendants.
+    It is the documented Windows-specific termination mechanism for this supervisor;
+    any failure remains a recordable termination path rather than an uncaught error.
+    """
+
+    if process.returncode is not None:
+        return ["already-exited"]
+    taskkill = await asyncio.create_subprocess_exec(
+        "taskkill",
+        "/PID",
+        str(process.pid),
+        "/T",
+        "/F",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        await asyncio.wait_for(taskkill.wait(), timeout=5)
+    except TimeoutError:
+        taskkill.kill()
+        await taskkill.wait()
+        return ["TASKKILL_TIMEOUT"]
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except TimeoutError:
+        return ["TASKKILL_RETURNED_PROCESS_STILL_RUNNING"]
+    if taskkill.returncode == 0:
+        return ["TASKKILL_TREE_FORCE"]
+    return [f"TASKKILL_EXIT_{taskkill.returncode}"]
 
 
 async def _capture_bounded_output(

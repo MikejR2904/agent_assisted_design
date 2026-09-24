@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from agent_sdk.artifacts import ArtifactStore
 from agent_sdk.contracts import ScopedAgentTask, TaskScope, ToolCall
 from agent_sdk.planning import ModelTier, PlanTask
 from agent_sdk.policy import CapabilityGrant, CapabilityPolicy, SideEffectClass
-from agent_sdk.supervisor import CommandTemplate, ProcessSupervisor
+from agent_sdk.supervisor import CommandTemplate, ProcessExitKind, ProcessSupervisor
 from agent_sdk.tool_registry import (
     HarnessExecutionContext,
     HarnessToolExecutor,
@@ -20,7 +21,7 @@ from agent_sdk.tool_registry import (
 from agent_sdk.tools import ToolInvocationContext
 
 
-def _plan_task() -> PlanTask:
+def _plan_task(*, authorized_artifact_ids: list[str] | None = None) -> PlanTask:
     return PlanTask(
         task_id="rtl-1",
         scope="REQ-RTL-1",
@@ -28,6 +29,7 @@ def _plan_task() -> PlanTask:
         instructions="Write one draft.",
         acceptance_criteria="gate:rtl",
         model_tier=ModelTier.STANDARD,
+        authorized_artifact_ids=authorized_artifact_ids or [],
     )
 
 
@@ -99,6 +101,112 @@ async def test_mutating_draft_tool_requires_typed_approval_then_writes_declared_
 
     assert result.status == "succeeded"
     assert (tmp_path / "drafts/top.sv").read_text() == "module top; endmodule"
+    occurrence_id = result.output["occurrence_id"]
+    occurrence = approved_context.artifacts.get_occurrence(occurrence_id)
+    assert occurrence is not None
+    assert occurrence.manifest == {
+        "run_id": "run-1",
+        "node_id": "node-rtl",
+        "task_id": "rtl-1",
+    }
+
+
+def test_artifact_store_preserves_every_same_content_write_occurrence(tmp_path: Path) -> None:
+    artifacts = ArtifactStore(tmp_path)
+    first = artifacts.write_text(
+        "drafts/first.sv",
+        "module top; endmodule",
+        manifest={"run_id": "run-first", "node_id": "node-first", "task_id": "task-first"},
+    )
+    second = artifacts.write_text(
+        "drafts/second.sv",
+        "module top; endmodule",
+        manifest={"run_id": "run-second", "node_id": "node-second", "task_id": "task-second"},
+    )
+
+    assert first.artifact_id == second.artifact_id
+    assert first.occurrence_id != second.occurrence_id
+    recovered = ArtifactStore(tmp_path)
+    first_occurrence = recovered.get_occurrence(first.occurrence_id or "")
+    second_occurrence = recovered.get_occurrence(second.occurrence_id or "")
+    assert first_occurrence is not None
+    assert second_occurrence is not None
+    assert first_occurrence.manifest["run_id"] == "run-first"
+    assert second_occurrence.manifest["run_id"] == "run-second"
+
+
+@pytest.mark.anyio
+async def test_declared_artifact_diff_requires_both_authorization_or_current_draft_proof(
+    tmp_path: Path,
+) -> None:
+    from agent_sdk.contracts import EpisodeKind, ToolDefinition
+
+    artifacts = ArtifactStore(tmp_path)
+    base = artifacts.write_text("inputs/base.sv", "module top; endmodule")
+    unrelated = artifacts.write_text("inputs/private.sv", "confidential")
+    context = HarnessExecutionContext(
+        run_id="run-1",
+        node_id="node-rtl",
+        role="rtl",
+        plan_task=_plan_task(authorized_artifact_ids=[base.artifact_id]),
+        run_root=tmp_path,
+        artifacts=artifacts,
+        policy=CapabilityPolicy(
+            [
+                CapabilityGrant(
+                    role="rtl",
+                    capabilities=["artifact.diff"],
+                )
+            ]
+        ),
+        approvals=ApprovalRegistry(),
+        supervisor=ProcessSupervisor(),
+        declared_output_paths=("drafts/top.sv",),
+    )
+    definition = ToolDefinition(
+        name="diff_declared_artifacts",
+        description="diff",
+        input_schema={"type": "object"},
+        episode_kind=EpisodeKind.EXPLORATORY,
+    )
+    blocked = await HarnessToolExecutor(HarnessToolRegistry(), context).execute(
+        definition,
+        _invocation(
+            ToolCall(
+                id="diff-private",
+                name="diff_declared_artifacts",
+                arguments={
+                    "base_artifact_id": base.artifact_id,
+                    "draft_artifact_id": unrelated.artifact_id,
+                },
+            )
+        ),
+    )
+    assert blocked.status == "failed"
+    assert "current-task occurrence proof" in (blocked.error or "")
+    assert "confidential" not in str(blocked.output)
+
+    draft = artifacts.write_text(
+        "drafts/top.sv",
+        "module top(input logic clk); endmodule",
+        manifest={"run_id": "run-1", "node_id": "node-rtl", "task_id": "rtl-1"},
+    )
+    permitted = await HarnessToolExecutor(HarnessToolRegistry(), context).execute(
+        definition,
+        _invocation(
+            ToolCall(
+                id="diff-draft",
+                name="diff_declared_artifacts",
+                arguments={
+                    "base_artifact_id": base.artifact_id,
+                    "draft_artifact_id": draft.artifact_id,
+                    "draft_occurrence_id": draft.occurrence_id,
+                },
+            )
+        ),
+    )
+    assert permitted.status == "succeeded"
+    assert "input logic clk" in permitted.output["unified_diff"]
 
 
 @pytest.mark.anyio
@@ -124,6 +232,27 @@ async def test_process_supervisor_records_registered_command_and_timeout(tmp_pat
     assert completed.return_code == 0
     assert "lint ok" in completed.output
     assert timed_out.timed_out is True
+
+
+@pytest.mark.anyio
+async def test_process_supervisor_returns_typed_record_after_cancellation(tmp_path: Path) -> None:
+    supervisor = ProcessSupervisor(
+        [
+            CommandTemplate(
+                name="slow",
+                command=[sys.executable, "-c", "import time; time.sleep(5)"],
+                timeout_seconds=10,
+            )
+        ]
+    )
+    execution = asyncio.create_task(supervisor.execute("slow", cwd=tmp_path))
+    await asyncio.sleep(0.05)
+    execution.cancel()
+    record = await execution
+
+    assert record.exit_kind is ProcessExitKind.CANCELLED
+    assert record.error_code == "PROCESS_CANCELLED"
+    assert record.termination_path
 
 
 @pytest.mark.anyio

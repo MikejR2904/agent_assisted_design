@@ -1,9 +1,12 @@
-"""Content-addressed artifacts under a declared run root."""
+"""Content-addressed artifacts and append-only write occurrences under one run root."""
 
 from __future__ import annotations
 
 import hashlib
 import os
+import threading
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,22 +16,48 @@ from .contracts import StrictModel
 
 
 class ArtifactRecord(StrictModel):
+    """Content identity with the occurrence that produced this returned record."""
+
     artifact_id: str = Field(min_length=1)
     relative_path: str = Field(min_length=1)
     sha256: str = Field(min_length=1)
     size_bytes: int = Field(ge=0)
     kind: str = Field(min_length=1)
     manifest: dict[str, Any] = Field(default_factory=dict)
+    occurrence_id: str | None = None
+
+
+class ArtifactWriteOccurrence(StrictModel):
+    """Immutable attribution for one artifact write, independent of content identity."""
+
+    occurrence_id: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+    relative_path: str = Field(min_length=1)
+    sha256: str = Field(min_length=1)
+    size_bytes: int = Field(ge=0)
+    kind: str = Field(min_length=1)
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    written_at_utc: str
 
 
 class ArtifactStore:
-    """Persist artifacts only below one root and register immutable manifests."""
+    """Persist artifacts below one root with immutable content and write attribution.
+
+    ``artifact_id`` remains a content hash for compatibility and deduplication. Every
+    registration additionally receives a unique immutable occurrence record, so the
+    same bytes written by separate runs cannot overwrite historical attribution.
+    """
 
     def __init__(self, run_root: Path) -> None:
         self._root = run_root.resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         self._manifest_root = self._root / ".agent-artifacts"
+        self._content_root = self._manifest_root / "content"
+        self._occurrence_root = self._manifest_root / "occurrences"
         self._manifest_root.mkdir(exist_ok=True)
+        self._content_root.mkdir(exist_ok=True)
+        self._occurrence_root.mkdir(exist_ok=True)
+        self._lock = threading.RLock()
 
     @property
     def root(self) -> Path:
@@ -45,8 +74,9 @@ class ArtifactStore:
         target = self._resolve_relative(relative_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         encoded = content.encode("utf-8")
-        self._atomic_write_bytes(target, encoded)
-        return self._register(target, relative_path, encoded, kind, manifest or {})
+        with self._lock:
+            self._atomic_write_bytes(target, encoded)
+            return self._register(target, relative_path, encoded, kind, manifest or {})
 
     def register_existing(
         self,
@@ -59,14 +89,20 @@ class ArtifactStore:
         if not target.is_file():
             raise ValueError(f'Declared artifact "{relative_path}" does not exist.')
         content = target.read_bytes()
-        return self._register(target, relative_path, content, kind, manifest or {})
+        with self._lock:
+            return self._register(target, relative_path, content, kind, manifest or {})
 
     def read_text(self, artifact_id: str) -> str:
         record = self.get(artifact_id)
         if record is None:
             raise ValueError(f'Artifact "{artifact_id}" is unknown.')
-        target = self._resolve_relative(record.relative_path)
-        content = target.read_bytes()
+        content_path = self._content_path(record.sha256)
+        if content_path.is_file():
+            content = content_path.read_bytes()
+        else:
+            # Legacy records predate immutable content blobs. Preserve read
+            # compatibility while refusing a changed path through hash validation.
+            content = self._resolve_relative(record.relative_path).read_bytes()
         actual = hashlib.sha256(content).hexdigest()
         if actual != record.sha256:
             raise ValueError(
@@ -79,6 +115,35 @@ class ArtifactStore:
         if not path.is_file():
             return None
         return ArtifactRecord.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def get_occurrence(self, occurrence_id: str) -> ArtifactWriteOccurrence | None:
+        path = self._occurrence_root / f"{occurrence_id}.json"
+        if not path.is_file():
+            return None
+        return ArtifactWriteOccurrence.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def occurrence_matches_task_draft(
+        self,
+        occurrence_id: str,
+        artifact_id: str,
+        *,
+        run_id: str,
+        node_id: str,
+        task_id: str,
+        declared_output_paths: tuple[str, ...],
+    ) -> bool:
+        """Return whether an immutable occurrence proves this task wrote the draft."""
+
+        occurrence = self.get_occurrence(occurrence_id)
+        if occurrence is None or occurrence.artifact_id != artifact_id:
+            return False
+        manifest = occurrence.manifest
+        return (
+            occurrence.relative_path in declared_output_paths
+            and manifest.get("run_id") == run_id
+            and manifest.get("node_id") == node_id
+            and manifest.get("task_id") == task_id
+        )
 
     def diff(self, base_artifact_id: str, draft_artifact_id: str) -> dict[str, Any]:
         import difflib
@@ -103,20 +168,45 @@ class ArtifactStore:
         kind: str,
         manifest: dict[str, Any],
     ) -> ArtifactRecord:
+        del target  # Content is retained below .agent-artifacts, not by mutable output path.
         digest = hashlib.sha256(content).hexdigest()
-        record = ArtifactRecord(
-            artifact_id=f"sha256:{digest}",
+        artifact_id = f"sha256:{digest}"
+        occurrence_id = f"occ-{uuid.uuid4().hex}"
+        occurrence = ArtifactWriteOccurrence(
+            occurrence_id=occurrence_id,
+            artifact_id=artifact_id,
             relative_path=relative_path,
             sha256=digest,
             size_bytes=len(content),
             kind=kind,
             manifest=manifest,
+            written_at_utc=datetime.now(UTC).isoformat(),
         )
+        content_target = self._content_path(digest)
+        if not content_target.exists():
+            self._atomic_write_bytes(content_target, content)
+        record = ArtifactRecord(
+            artifact_id=artifact_id,
+            relative_path=relative_path,
+            sha256=digest,
+            size_bytes=len(content),
+            kind=kind,
+            manifest=manifest,
+            occurrence_id=occurrence_id,
+        )
+        canonical_path = self._manifest_root / f"{artifact_id}.json"
+        if not canonical_path.exists():
+            self._atomic_write_bytes(
+                canonical_path, record.model_dump_json(indent=2).encode("utf-8")
+            )
         self._atomic_write_bytes(
-            self._manifest_root / f"{record.artifact_id}.json",
-            record.model_dump_json(indent=2).encode("utf-8"),
+            self._occurrence_root / f"{occurrence_id}.json",
+            occurrence.model_dump_json(indent=2).encode("utf-8"),
         )
         return record
+
+    def _content_path(self, digest: str) -> Path:
+        return self._content_root / digest
 
     def _resolve_relative(self, relative_path: str) -> Path:
         candidate = Path(relative_path)

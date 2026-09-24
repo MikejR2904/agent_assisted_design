@@ -135,6 +135,11 @@ class HarnessToolExecutor(ToolExecutor):
                 root=context.run_root,
                 artifacts=context.artifacts,
                 declared_output_paths=context.declared_output_paths,
+                write_manifest={
+                    "run_id": context.run_id,
+                    "node_id": context.node_id,
+                    "task_id": context.plan_task.task_id,
+                },
                 result_journal=context.result_journal,
                 search_client=context.search_client,
                 ask_human=context.ask_human,
@@ -254,27 +259,29 @@ class HarnessToolExecutor(ToolExecutor):
                 "matches": [index + 1 for index, line in enumerate(lines) if needle in line],
             }
 
-        if tool.name == "write_draft":
-            path = _string_argument(arguments, "path")
-            if path not in self._context.declared_output_paths:
-                raise ValueError("Draft path was not declared for this PlanTask run.")
-            record = self._context.artifacts.write_text(
-                path,
-                _string_argument(arguments, "content"),
-                manifest={
-                    "run_id": self._context.run_id,
-                    "node_id": self._context.node_id,
-                    "task_id": self._context.plan_task.task_id,
-                },
-            )
-            return record.model_dump(mode="json")
-
         if tool.name == "diff_declared_artifacts":
             base = _string_argument(arguments, "base_artifact_id")
             draft = _string_argument(arguments, "draft_artifact_id")
             allowed = set(self._context.plan_task.authorized_artifact_ids)
-            if base not in allowed and draft not in allowed:
-                raise ValueError("At least one diff artifact must be authorized by the PlanTask.")
+            if base not in allowed:
+                raise ValueError("Base artifact is not authorized for this PlanTask.")
+            if draft not in allowed:
+                occurrence_id = arguments.get("draft_occurrence_id")
+                if not isinstance(occurrence_id, str) or not occurrence_id:
+                    raise ValueError(
+                        "Draft artifact is not authorized and lacks current-task occurrence proof."
+                    )
+                if not self._context.artifacts.occurrence_matches_task_draft(
+                    occurrence_id,
+                    draft,
+                    run_id=self._context.run_id,
+                    node_id=self._context.node_id,
+                    task_id=self._context.plan_task.task_id,
+                    declared_output_paths=self._context.declared_output_paths,
+                ):
+                    raise ValueError(
+                        "Draft artifact is not authorized and lacks current-task occurrence proof."
+                    )
             return self._context.artifacts.diff(base, draft)
 
         if tool.command_template:

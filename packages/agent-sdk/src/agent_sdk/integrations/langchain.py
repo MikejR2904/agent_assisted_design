@@ -136,7 +136,9 @@ class LangChainSdkToolFacade:
             if preflight_result is not None:
                 return _result_mapping(preflight_result)
         result = await self._executor.execute(self._tool, invocation)
-        return result.model_dump(mode="json")
+        payload = result.model_dump(mode="json")
+        payload.pop("failure", None)
+        return payload
 
     def as_tool(self) -> Any:
         """Build a ``StructuredTool`` with the declared SDK JSON schema unchanged."""

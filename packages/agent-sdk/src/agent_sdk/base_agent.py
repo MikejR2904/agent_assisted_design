@@ -23,6 +23,7 @@ from .context_projection import (
 from .contracts import (
     AgentDefinition,
     AgentEscalation,
+    AgentFailure,
     AgentLifecycleEvent,
     AgentResult,
     AgentRunStatus,
@@ -637,6 +638,7 @@ class BaseAgent:
                     events,
                     emit,
                     projection_history,
+                    failure=AgentFailure.from_sdk_error(error),
                 )
             protected_episode_ids = frozenset()
             if turn.type == "blocked":
@@ -774,6 +776,27 @@ class BaseAgent:
                     events,
                     emit,
                     projection_history,
+                )
+            except AgentSdkError as error:
+                self.profiler.finish_span(verification_span, ProfileSpanStatus.FAILED)
+                emit(
+                    "verification-completed",
+                    iteration,
+                    passed=False,
+                    reason=error.message,
+                    failure_code=error.code,
+                )
+                return self._terminate(
+                    AgentRunStatus.FAILED,
+                    task,
+                    iteration,
+                    error.message,
+                    prompt,
+                    episodes,
+                    events,
+                    emit,
+                    projection_history,
+                    failure=AgentFailure.from_sdk_error(error),
                 )
             except Exception as error:
                 self.profiler.finish_span(verification_span, ProfileSpanStatus.FAILED)
@@ -941,6 +964,7 @@ class BaseAgent:
                         episodes,
                         events,
                         emit,
+                        failure=item.result.failure,
                     )
 
             if blocked_reason is not None:
@@ -1055,7 +1079,11 @@ class BaseAgent:
         except AgentSdkError as error:
             return self._record_unexecuted_result(
                 call,
-                ToolExecutionResult(status="failed", error=error.message),
+                ToolExecutionResult(
+                    status="failed",
+                    error=error.message,
+                    failure=AgentFailure.from_sdk_error(error),
+                ),
                 iteration,
                 terminal_status=AgentRunStatus.FAILED,
             )
@@ -1336,6 +1364,7 @@ class BaseAgent:
         emit: Callable[..., None],
         projection_history: Sequence[ContextProjectionMetadata] = (),
         output: Any = None,
+        failure: AgentFailure | None = None,
     ) -> AgentResult:
         escalation = None
         target = self.definition.termination_policy.escalation
@@ -1343,7 +1372,13 @@ class BaseAgent:
             escalation = AgentEscalation(
                 target=target.value, reason=reason or "Agent did not complete."
             )
-        emit("terminated", iterations, status=status.value, reason=reason)
+        emit(
+            "terminated",
+            iterations,
+            status=status.value,
+            reason=reason,
+            failure_code=failure.code if failure is not None else None,
+        )
         if escalation:
             emit("escalated", iterations, target=escalation.target, reason=escalation.reason)
         project_state = self._active_project_state
@@ -1455,6 +1490,7 @@ class BaseAgent:
             iterations=iterations,
             output=output,
             reason=reason,
+            failure=failure,
             escalation=escalation,
             context=prompt,
             project_state=project_state.model_view() if project_state is not None else None,

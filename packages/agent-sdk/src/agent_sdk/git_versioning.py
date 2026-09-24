@@ -104,12 +104,14 @@ class SpecificationLockRecord(StrictModel):
 
 
 class VariantWorktreeRecord(StrictModel):
-    schema_version: str = "variant-worktree-v1"
+    schema_version: str = "variant-worktree-v2"
     name: str
     path: str
     branch: str
     head_commit: str
     specification_tag: str
+    base_ref: str
+    base_commit: str
     purpose: str
     approval: GitApproval
     created_at_utc: str
@@ -178,6 +180,13 @@ class GitRepositoryAdapter:
 
     def tag_object_id(self, tag_name: str) -> str:
         return self._git("rev-parse", f"{tag_name}^{{tag}}").strip()
+
+    def resolve_commit(self, ref: str) -> str:
+        """Resolve one non-option revision to an immutable commit object ID."""
+
+        if not ref or ref.startswith("-"):
+            raise ValueError("Git revision must be a non-empty, non-option reference.")
+        return self._git("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}").strip()
 
     def create_worktree(self, path: Path, branch: str, base_ref: str) -> None:
         self._git("worktree", "add", "-b", branch, str(path), base_ref)
@@ -433,12 +442,18 @@ class SpecificationVersionService:
             raise ValueError("Variant name is invalid.")
         if not repository.tag_exists(specification_tag):
             raise ValueError("Variant worktrees must reference an existing specification tag.")
+        resolved_base = repository.resolve_commit(base_ref)
+        resolved_tag = repository.resolve_commit(specification_tag)
+        if resolved_base != resolved_tag:
+            raise ValueError(
+                "Variant worktree base_ref must resolve to the approved specification tag commit."
+            )
         worktree_root = self._lock_root / "worktrees"
         worktree_root.mkdir(exist_ok=True)
         target = (worktree_root / name).resolve()
         if target.exists():
             raise ValueError("Variant worktree path already exists.")
-        repository.create_worktree(target, branch, base_ref)
+        repository.create_worktree(target, branch, resolved_base)
         state = GitRepositoryAdapter(target).state()
         record = VariantWorktreeRecord(
             name=name,
@@ -446,6 +461,8 @@ class SpecificationVersionService:
             branch=branch,
             head_commit=state.head_commit,
             specification_tag=specification_tag,
+            base_ref=base_ref,
+            base_commit=resolved_base,
             purpose=purpose,
             approval=approval,
             created_at_utc=datetime.now(UTC).isoformat(),

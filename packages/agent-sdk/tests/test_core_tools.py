@@ -80,3 +80,34 @@ async def test_exact_edit_rejects_ambiguous_replacement(tmp_path: Path) -> None:
     )
     assert result.status == "failed"
     assert "ambiguous" in (result.error or "")
+
+
+@pytest.mark.anyio
+async def test_grep_enforces_regex_deadline_and_aggregate_scan_budget(tmp_path: Path) -> None:
+    (tmp_path / "catastrophic.txt").write_text("a" * 40 + "!", encoding="utf-8")
+    (tmp_path / "second.txt").write_text("beta", encoding="utf-8")
+    tools = CoreToolDispatcher(
+        CoreToolServices(
+            root=tmp_path,
+            artifacts=ArtifactStore(tmp_path),
+            declared_output_paths=(),
+            max_grep_seconds=0.5,
+            max_grep_total_bytes=44,
+        )
+    )
+
+    timed_out = await tools.execute("grep", {"pattern": "(a+)+$", "file_glob": "*.txt"})
+    assert timed_out.status == "failed"
+    assert "GREP_REGEX_TIMEOUT" in (timed_out.error or "")
+
+    normal_tools = CoreToolDispatcher(
+        CoreToolServices(
+            root=tmp_path,
+            artifacts=ArtifactStore(tmp_path),
+            declared_output_paths=(),
+            max_grep_total_bytes=44,
+        )
+    )
+    bounded = await normal_tools.execute("grep", {"pattern": "beta", "file_glob": "*.txt"})
+    assert bounded.status == "succeeded"
+    assert bounded.output["scan_truncated"] is True

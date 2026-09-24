@@ -145,6 +145,50 @@ async def test_model_turn_watchdog_has_a_stable_terminal_reason():
 
 
 @pytest.mark.anyio
+async def test_invalid_model_turn_preserves_typed_failure_envelope() -> None:
+    class InvalidTurnModel:
+        async def next_turn(self, _context):
+            return {"type": "unknown-turn"}
+
+    result = await BaseAgent(
+        sample_definition(),
+        InvalidTurnModel(),
+    ).run(sample_task())
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "MODEL_TURN_INVALID"
+    assert result.failure.details["validation_error"]
+
+
+@pytest.mark.anyio
+async def test_invalid_tool_arguments_preserve_typed_failure_envelope() -> None:
+    result = await BaseAgent(
+        sample_definition(),
+        ScriptedModel(
+            [{"type": "tool-call", "call": {"id": "echo-1", "name": "echo", "arguments": {}}}]
+        ),
+        InMemoryTaskToolExecutor(),
+    ).run(sample_task())
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "SCHEMA_VALIDATION_FAILED"
+
+
+@pytest.mark.anyio
+async def test_unknown_verification_gate_preserves_typed_failure_envelope() -> None:
+    result = await BaseAgent(
+        sample_definition(verification_gate_id="local-gate-not-registered"),
+        ScriptedModel([{"type": "final", "output": {"status": "complete", "findings": []}}]),
+    ).run(sample_task())
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "VERIFICATION_GATE_UNKNOWN"
+
+
+@pytest.mark.anyio
 async def test_project_state_budget_exhaustion_is_explicit_not_silent():
     task = sample_task()
     store = InMemoryProjectStateStore()

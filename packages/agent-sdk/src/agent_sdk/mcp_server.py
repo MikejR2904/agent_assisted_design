@@ -68,7 +68,7 @@ from .telemetry import (
 from .tools import InMemoryTaskToolExecutor
 
 SERVER_NAME = "agent-design-python-runtime"
-SERVER_VERSION = "0.15.0"
+SERVER_VERSION = "0.16.0"
 
 
 def _validation_errors(error: ValidationError) -> list[dict[str, Any]]:

@@ -302,7 +302,40 @@ additive requirement IDs are MINOR; acceptance-check/source-reference-only chang
 PATCH. Automatic classification refuses a pre-existing tag with no stored snapshot until
 an approved baseline lock exists.[15]
 
-## 15. Current integration limits
+## 15. Preserve P0 trust guarantees
+
+The 0.16.0 P0 increment repairs guarantees already made by the local harness; it does
+not establish semantic derivation or a multi-tenant service. `ArtifactStore` keeps a
+content-addressed ID for compatibility and an immutable `ArtifactWriteOccurrence` for
+each write. The default governed mutable tools attach run/node/task attribution. A
+custom tool handler remains responsible for its own attribution because it intentionally
+precedes the standard dispatcher.[19]
+
+`diff_declared_artifacts` requires an authorized base plus either an authorized draft or
+the draft occurrence returned by the current task’s declared mutable write. Do not relax
+this to “one side authorized”: a diff reveals both contents. Telemetry and audit list
+methods are still bounded review pages, but integrity verification now streams the full
+stored chain; reports/transcripts declare their complete verified count separately from
+their rendered page count. Local hash chains do not prove an undeleted historical tail;
+use an externally retained checkpoint if rollback detection becomes a requirement.[19]
+
+`AgentResult.failure` is the bounded/redacted structured envelope for terminal SDK
+contract failures. Preserve `reason` for compatibility, but use `failure.code` for
+reliable recovery classification. Interop projections reject canonical snake/camel/kebab
+and case variants of authority/credential keys. Model-facing `grep` runs in an isolated
+child with a deadline and file/byte budgets, because backtracking regular expressions can
+cause unbounded CPU consumption.[19] [20]
+
+Variant worktrees must resolve their `base_ref` to the approved specification-tag commit;
+the durable record retains both ref and commit. On POSIX the supervisor kills a process
+group; Windows uses a separate `taskkill /T /F` branch. The latter is implemented but has
+not been exercised on a Windows runner, so do not claim Windows validation yet.[19]
+
+Read [the P0 repair record](p0-trust-guarantee-repair.md) before extending these paths.
+Every change must preserve occurrence history, full-chain verification, bounded failure
+details, and both-side content authorization.
+
+## 16. Current integration limits
 
 The SDK has no selected real model provider, remote execution backend, SSH/Desktop/Sandbox connector, EDA binary, container/cgroup isolation, multi-process lock, external authenticated identity, or live RTL-to-GDSII benchmark corpus. It must not be presented as already providing those capabilities. The implemented PCKP benchmark is a frozen engineering fixture used to verify deterministic selection and compare it with the greedy baseline; it is not an ASIC-flow performance result.[5] [8]
 
@@ -343,3 +376,7 @@ The SDK has no selected real model provider, remote execution backend, SSH/Deskt
 [17]: https://qdrant.tech/documentation/concepts/filtering/ "Qdrant filtering and payload-index documentation"
 
 [18]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/dependency_graph.py "Deterministic reverse reachability and cycle traversal"
+
+[19]: p0-trust-guarantee-repair.md "P0 Trust-Guarantee Repair Record: implemented contracts, invariants, evidence, and limitations"
+
+[20]: https://cwe.mitre.org/data/definitions/1333.html "CWE-1333: Inefficient Regular Expression Complexity"

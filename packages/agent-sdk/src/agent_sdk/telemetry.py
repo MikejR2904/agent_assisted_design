@@ -12,7 +12,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -280,19 +280,53 @@ class TelemetryStore:
         *,
         limit: int = 250,
         after_sequence: int = 0,
+        through_sequence: int | None = None,
     ) -> list[TelemetryEvent]:
         if limit < 1 or limit > 1_000:
             raise ValueError("Telemetry event page size must be between 1 and 1000.")
+        if through_sequence is not None and through_sequence < after_sequence:
+            return []
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT event_json FROM events
-                WHERE run_id = ? AND sequence > ?
+                WHERE run_id = ? AND sequence > ? AND (? IS NULL OR sequence <= ?)
                 ORDER BY sequence ASC LIMIT ?
                 """,
-                (run_id, after_sequence, limit),
+                (run_id, after_sequence, through_sequence, through_sequence, limit),
             ).fetchall()
         return [TelemetryEvent.model_validate_json(str(row[0])) for row in rows]
+
+    def run_snapshot_sequence(self, run_id: str) -> int:
+        """Return the highest persisted sequence for an explicit verification boundary."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) FROM events WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return int(row[0])
+
+    def iter_events(
+        self,
+        run_id: str,
+        *,
+        page_size: int = 1_000,
+        through_sequence: int | None = None,
+    ) -> Iterator[TelemetryEvent]:
+        """Stream a complete ordered run sequence through one fixed sequence boundary."""
+
+        boundary = (
+            self.run_snapshot_sequence(run_id) if through_sequence is None else through_sequence
+        )
+        after_sequence = 0
+        while page := self.list_events(
+            run_id,
+            limit=page_size,
+            after_sequence=after_sequence,
+            through_sequence=boundary,
+        ):
+            yield from page
+            after_sequence = page[-1].sequence
 
     def list_metrics(self, run_id: str) -> list[MetricObservation]:
         with self._connect() as connection:
@@ -337,8 +371,13 @@ class TelemetryStore:
         return summaries
 
     def verify_run_chain(self, run_id: str) -> bool:
+        boundary = self.run_snapshot_sequence(run_id)
+        return self._verify_events(self.iter_events(run_id, through_sequence=boundary))
+
+    @staticmethod
+    def _verify_events(events: Iterable[TelemetryEvent]) -> bool:
         previous: str | None = None
-        for event in self.list_events(run_id, limit=1_000):
+        for event in events:
             expected = _canonical_hash(
                 event.model_copy(update={"integrity_hash": ""}).model_dump(mode="json")
             )
@@ -348,7 +387,8 @@ class TelemetryStore:
         return True
 
     def create_run_report(self, run_id: str) -> dict[str, Any]:
-        events = self.list_events(run_id, limit=1_000)
+        boundary = self.run_snapshot_sequence(run_id)
+        events = list(self.iter_events(run_id, through_sequence=boundary))
         metrics = self.list_metrics(run_id)
         if not events:
             raise ValueError(f'Telemetry run "{run_id}" is unknown.')
@@ -356,7 +396,9 @@ class TelemetryStore:
             "schema_version": "run-report-v1",
             "run_id": run_id,
             "event_count": len(events),
-            "integrity_chain_valid": self.verify_run_chain(run_id),
+            "verified_event_count": len(events),
+            "verified_through_sequence": boundary,
+            "integrity_chain_valid": self._verify_events(events),
             "statuses": _count(event.status for event in events),
             "event_types": _count(event.event_type for event in events),
             "watchdog_interventions": sum(

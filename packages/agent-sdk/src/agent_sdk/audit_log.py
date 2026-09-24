@@ -7,6 +7,7 @@ import json
 import os
 import re
 import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,13 @@ class AuditTranscriptStore:
                 os.fsync(handle.fileno())
             return complete
 
-    def list_entries(self, run_id: str, *, limit: int = 1_000) -> list[AuditLogEntry]:
+    def list_entries(
+        self,
+        run_id: str,
+        *,
+        limit: int = 1_000,
+        through_sequence: int | None = None,
+    ) -> list[AuditLogEntry]:
         if limit < 1 or limit > 10_000:
             raise ValueError("Audit-log page size must be between 1 and 10000.")
         path = self._jsonl_path(run_id)
@@ -93,11 +100,47 @@ class AuditTranscriptStore:
             for line in path.read_text(encoding="utf-8").splitlines()
             if line
         ]
+        if through_sequence is not None:
+            entries = [entry for entry in entries if entry.sequence <= through_sequence]
         return entries[:limit]
 
+    def snapshot_sequence(self, run_id: str) -> int:
+        """Return the local append sequence used as a verification boundary."""
+
+        with self._lock:
+            _previous, sequence = self._tail(self._jsonl_path(run_id))
+        return sequence
+
+    def iter_entries(
+        self, run_id: str, *, through_sequence: int | None = None
+    ) -> Iterator[AuditLogEntry]:
+        """Stream one complete transcript sequence through a fixed boundary."""
+
+        boundary = self.snapshot_sequence(run_id) if through_sequence is None else through_sequence
+        path = self._jsonl_path(run_id)
+        if not path.exists():
+            return
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    entry = AuditLogEntry.model_validate_json(line)
+                    if entry.sequence > boundary:
+                        return
+                    yield entry
+
+    def entry_count(self, run_id: str, *, through_sequence: int | None = None) -> int:
+        """Return the complete persisted transcript length for an audit run."""
+
+        return sum(1 for _ in self.iter_entries(run_id, through_sequence=through_sequence))
+
     def verify(self, run_id: str) -> bool:
+        boundary = self.snapshot_sequence(run_id)
+        return self._verify_entries(self.iter_entries(run_id, through_sequence=boundary))
+
+    @staticmethod
+    def _verify_entries(entries: Iterator[AuditLogEntry]) -> bool:
         previous: str | None = None
-        for entry in self.list_entries(run_id):
+        for entry in entries:
             expected = _hash(
                 entry.model_copy(update={"integrity_hash": ""}).model_dump(mode="json")
             )
@@ -107,12 +150,18 @@ class AuditTranscriptStore:
         return True
 
     def render_markdown(self, run_id: str) -> Path:
-        entries = self.list_entries(run_id)
+        boundary = self.snapshot_sequence(run_id)
+        entries = self.list_entries(run_id, through_sequence=boundary)
+        entry_count = self.entry_count(run_id, through_sequence=boundary)
+        integrity_valid = self._verify_entries(self.iter_entries(run_id, through_sequence=boundary))
         path = self._root / f"{_safe_name(run_id)}.transcript.md"
         lines = [
             f"# Agent audit transcript: `{run_id}`",
             "",
-            f"Integrity chain valid: `{self.verify(run_id)}`",
+            f"Integrity chain valid: `{integrity_valid}`",
+            f"Verified transcript entries: `{entry_count}`",
+            f"Verified through sequence: `{boundary}`",
+            f"Rendered entries: `{len(entries)}`",
             "",
         ]
         for entry in entries:

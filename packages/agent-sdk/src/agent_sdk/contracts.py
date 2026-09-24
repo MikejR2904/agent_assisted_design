@@ -15,7 +15,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .errors import AgentSdkError
+from .errors import AgentSdkError, sanitize_failure_details
 
 
 class StrictModel(BaseModel):
@@ -185,10 +185,28 @@ class ToolCall(StrictModel):
         return self
 
 
+class AgentFailure(StrictModel):
+    """Bounded, redacted causal data for a terminal or tool-contract failure."""
+
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def details_are_safe(cls, details: dict[str, Any] | None) -> dict[str, Any]:
+        return sanitize_failure_details(details)
+
+    @classmethod
+    def from_sdk_error(cls, error: AgentSdkError) -> AgentFailure:
+        return cls(code=error.code, message=error.message, details=error.details)
+
+
 class ToolExecutionResult(StrictModel):
     status: Literal["succeeded", "failed", "blocked"]
     output: Any | None = None
     error: str | None = None
+    failure: AgentFailure | None = None
 
 
 class ToolCallTurn(StrictModel):
@@ -353,6 +371,7 @@ class AgentResult(StrictModel):
     iterations: int = Field(ge=0)
     output: Any | None = None
     reason: str | None = None
+    failure: AgentFailure | None = None
     escalation: AgentEscalation | None = None
     context: AgentPrompt | None = None
     project_state: dict[str, Any] | None = None

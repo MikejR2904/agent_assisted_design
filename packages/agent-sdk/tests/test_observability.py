@@ -201,6 +201,53 @@ def test_git_soft_lock_captures_complete_clean_state_and_variant_worktree(tmp_pa
     assert adapter.tag_exists("v1.0.0")
     assert Path(variant.path).is_dir()
     assert variant.specification_tag == "v1.0.0"
+    assert variant.base_ref == "HEAD"
+    assert variant.base_commit == adapter.resolve_commit("v1.0.0")
+
+
+def test_git_variant_worktree_rejects_unapproved_base_commit(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    repository = root / "specification-repository"
+    repository.mkdir(parents=True)
+    _git(["init"], repository)
+    _git(["config", "user.name", "Test Designer"], repository)
+    _git(["config", "user.email", "designer@example.test"], repository)
+    (repository / "specification.yaml").write_text("version: 1.0.0\n", encoding="utf-8")
+    _git(["add", "specification.yaml"], repository)
+    _git(["commit", "-m", "initial specification"], repository)
+    specification = _specification()
+    metadata = VersionMetadata(
+        version="1.0.0",
+        change_kind=VersionChangeKind.MAJOR,
+        unified_specification_hash=_hash(specification.model_dump(mode="json")),
+        soft_locked=True,
+    )
+    adapter = GitRepositoryAdapter(repository)
+    service = SpecificationVersionService(root)
+    lock = service.create_lock(
+        adapter,
+        specification,
+        DependencyGraph(),
+        GapReport(document_version="1.0.0"),
+        metadata,
+        _approval("create-specification-lock"),
+    )
+    (repository / "specification.yaml").write_text("version: 1.0.1\n", encoding="utf-8")
+    _git(["add", "specification.yaml"], repository)
+    _git(["commit", "-m", "unapproved change"], repository)
+
+    with pytest.raises(ValueError, match="approved specification tag commit"):
+        service.create_variant_worktree(
+            adapter,
+            name="unapproved-base",
+            branch="unapproved/base",
+            base_ref="HEAD",
+            specification_tag=lock.tag_name,
+            purpose="Must remain rooted in the locked specification.",
+            approval=_approval("create-variant-worktree"),
+        )
+    with pytest.raises(ValueError, match="non-option"):
+        adapter.resolve_commit("--malformed")
 
 
 def test_git_lock_rejects_unapproved_action(tmp_path: Path):

@@ -56,6 +56,12 @@ def test_interop_envelope_derives_and_verifies_projection_digest() -> None:
     [
         {"messages": [{"role": "user", "content": "raw transcript"}]},
         {"approval_token": "must-not-cross-boundary"},
+        {"approvalId": "must-not-cross-boundary"},
+        {"capabilityToken": "must-not-cross-boundary"},
+        {"privateKey": "must-not-cross-boundary"},
+        {"private-key": "must-not-cross-boundary"},
+        {"PRIVATEKEY": "must-not-cross-boundary"},
+        {"rawResponse": "must-not-cross-boundary"},
         {"callback": lambda: None},
     ],
 )
