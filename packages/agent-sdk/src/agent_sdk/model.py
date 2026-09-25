@@ -19,7 +19,6 @@ from .contracts import (
 from .errors import AgentSdkError
 from .project_state import ProjectStateView
 
-# Built once: see base_agent.py's identical rationale for caching this adapter.
 _AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
 
 

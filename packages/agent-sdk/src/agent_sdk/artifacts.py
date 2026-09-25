@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -12,6 +11,7 @@ from typing import Any
 
 from pydantic import Field
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 
 
@@ -48,28 +48,18 @@ class ArtifactStore:
     same bytes written by separate runs cannot overwrite historical attribution.
     """
 
-    # A host typically constructs one ArtifactStore per task/tool-dispatch rather
-    # than one per run, so the same resolved root is re-initialized repeatedly
-    # within one process. Each __init__ otherwise costs 5 filesystem round trips
-    # (1 resolve + 4 mkdir) regardless of whether anything actually changed; this
-    # cache makes repeat construction for an already-initialized root effectively
-    # free. Write sites still create their target's parent directory defensively,
-    # so this cannot silently skip directory creation a write depends on.
-    _initialized_roots: set[Path] = set()
-    _initialized_roots_lock = threading.Lock()
-
     def __init__(self, run_root: Path) -> None:
         self._root = run_root.resolve()
         self._manifest_root = self._root / ".agent-artifacts"
         self._content_root = self._manifest_root / "content"
         self._occurrence_root = self._manifest_root / "occurrences"
-        with self._initialized_roots_lock:
-            if self._root not in self._initialized_roots:
-                self._root.mkdir(parents=True, exist_ok=True)
-                self._manifest_root.mkdir(exist_ok=True)
-                self._content_root.mkdir(exist_ok=True)
-                self._occurrence_root.mkdir(exist_ok=True)
-                self._initialized_roots.add(self._root)
+        for directory in (
+            self._root,
+            self._manifest_root,
+            self._content_root,
+            self._occurrence_root,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
 
     @property
@@ -124,8 +114,8 @@ class ArtifactStore:
         return content.decode("utf-8")
 
     def get(self, artifact_id: str) -> ArtifactRecord | None:
-        path = self._manifest_path(artifact_id)
-        if not path.is_file():
+        path = self._existing_manifest_path(artifact_id)
+        if path is None:
             return None
         return ArtifactRecord.model_validate_json(path.read_text(encoding="utf-8"))
 
@@ -208,7 +198,7 @@ class ArtifactStore:
             occurrence_id=occurrence_id,
         )
         canonical_path = self._manifest_path(artifact_id)
-        if not canonical_path.exists():
+        if self._existing_manifest_path(artifact_id) is None:
             self._atomic_write_bytes(
                 canonical_path, record.model_dump_json(indent=2).encode("utf-8")
             )
@@ -222,10 +212,15 @@ class ArtifactStore:
         return self._content_root / digest
 
     def _manifest_path(self, artifact_id: str) -> Path:
-        # `artifact_id` is content-addressed as "sha256:<hex>"; the colon is not a
-        # legal Windows filename character, so the on-disk name must be sanitized
-        # even though the logical artifact_id keeps its colon-bearing form.
+        # Keep logical content IDs portable on disk without changing their public form.
         return self._manifest_root / f"{_safe_name(artifact_id)}.json"
+
+    def _existing_manifest_path(self, artifact_id: str) -> Path | None:
+        portable = self._manifest_path(artifact_id)
+        if portable.is_file():
+            return portable
+        legacy = self._manifest_root / f"{artifact_id}.json"
+        return legacy if legacy.is_file() else None
 
     def _resolve_relative(self, relative_path: str) -> Path:
         candidate = Path(relative_path)
@@ -240,12 +235,19 @@ class ArtifactStore:
 
     @staticmethod
     def _atomic_write_bytes(target: Path, content: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_bytes(content)
-        os.replace(temporary, target)
+        _replace_with_retry(temporary, target)
 
 
 def _safe_name(value: str) -> str:
     return "".join(
         character if character.isalnum() or character in "-_." else "_" for character in value
     )
+
+
+def _replace_with_retry(temporary: Path, target: Path, *, attempts: int = 5) -> None:
+    """Compatibility wrapper for the shared atomic publication primitive."""
+
+    replace_atomic(temporary, target, attempts=attempts)

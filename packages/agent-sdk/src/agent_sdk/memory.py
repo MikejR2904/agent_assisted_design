@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections.abc import Iterable
 from enum import StrEnum
@@ -20,6 +19,7 @@ from typing import Any, Protocol
 
 from pydantic import Field, model_validator
 
+from .atomic_io import replace_atomic
 from .contracts import EpisodeKind, StrictModel
 from .optimization import ExactPckpSolver, PckpItem, PckpProblem, PckpStatus
 
@@ -79,6 +79,10 @@ class PaskCompactionPolicy(StrictModel):
     standard scorer is lexical, so the default requires no embedding model or
     external service.  A host may inject a local, deterministic embedding scorer
     when it can reproduce the score from versioned model assets.
+
+    ``exact_max_branch_nodes`` bounds only general-DAG branch-and-bound search.
+    A capped search returns an auditable feasible ``BEST_EFFORT`` certificate;
+    the rooted-forest dynamic-program path remains exact.
     """
 
     strategy: CompactionStrategy = CompactionStrategy.EXACT_PCKP
@@ -88,6 +92,7 @@ class PaskCompactionPolicy(StrictModel):
     recency_weight: float = Field(default=0.10, ge=0)
     frequency_weight: float = Field(default=0.05, ge=0)
     diversity_weight: float = Field(default=0.05, ge=0)
+    exact_max_branch_nodes: int = Field(default=50_000, ge=1, le=1_000_000)
 
     @model_validator(mode="after")
     def has_positive_weight(self) -> PaskCompactionPolicy:
@@ -506,7 +511,7 @@ class InMemoryEpisodeStore:
                 for episode_id in sorted(live_ids)
             ],
         )
-        solution = ExactPckpSolver().solve(problem)
+        solution = ExactPckpSolver(max_branch_nodes=policy.exact_max_branch_nodes).solve(problem)
         query_hash = hashlib.sha256(relevance_query.encode("utf-8")).hexdigest()
         if solution.status is PckpStatus.INFEASIBLE_MANDATORY:
             compacted = self._compact_unretained(live_ids - mandatory)
@@ -550,6 +555,7 @@ class InMemoryEpisodeStore:
                     for episode_id in sorted(utilities)
                 ],
                 "policy": policy.model_dump(mode="json"),
+                "branch_node_limit": policy.exact_max_branch_nodes,
                 "solver": solution.model_dump(mode="json"),
                 "objective": "additive static utility under dependency-closed PCKP",
                 "guarantee": (
@@ -967,7 +973,7 @@ class FileEpisodeStore(InMemoryEpisodeStore):
     def _atomic_write(path: Path, content: str) -> None:
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_text(content, encoding="utf-8")
-        os.replace(temporary, path)
+        replace_atomic(temporary, path)
 
 
 def _episode_tokens(record: EpisodeRecord) -> int:

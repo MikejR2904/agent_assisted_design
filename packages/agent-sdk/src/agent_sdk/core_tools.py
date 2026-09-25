@@ -88,10 +88,8 @@ class CoreToolServices:
     write_manifest: dict[str, Any] | None = None
     max_grep_files: int = 500
     max_grep_total_bytes: int = 4_000_000
-    # The regex sandbox spawns a fresh interpreter per call (see `_bounded_regex_search`),
-    # which must re-import this package before it can search a single line. Measured
-    # cold-start import cost is ~2.2s (dominated by the `mcp` SDK and `openpyxl`), so a
-    # deadline near that makes every legitimate call fail, not just adversarial patterns.
+    # The timeout covers isolated-worker startup as well as regex matching. Keep it
+    # finite but above the supported-environment startup budget for valid searches.
     max_grep_seconds: float = 8.0
 
     def __post_init__(self) -> None:
@@ -340,7 +338,9 @@ class CoreToolDispatcher:
         path = _required_text(arguments, "path")
         if path not in self._services.declared_output_paths:
             raise ValueError("Notebook path was not declared for this governed task.")
-        cell_index = _nonnegative_int(arguments.get("cell_index", 0), "cell_index")
+        # A sparse index materializes every preceding cell, so bound it even when
+        # a host calls this dispatcher directly without schema validation.
+        cell_index = _bounded_int(arguments.get("cell_index", 0), "cell_index", 0, 2_000)
         source = _required_text(arguments, "new_source")
         mode = str(arguments.get("mode", "replace"))
         if mode not in {"replace", "append"}:
@@ -567,7 +567,7 @@ def core_tool_definitions() -> list[ToolDefinition]:
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "cell_index": {"type": "integer", "minimum": 0},
+                    "cell_index": {"type": "integer", "minimum": 0, "maximum": 2000},
                     "new_source": {"type": "string"},
                     "mode": {"enum": ["replace", "append"]},
                 },

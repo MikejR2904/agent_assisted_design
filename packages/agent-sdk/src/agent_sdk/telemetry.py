@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 import threading
 import uuid
@@ -21,6 +20,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 
 
@@ -137,13 +137,8 @@ class TelemetryStore:
         self._root.mkdir(parents=True, exist_ok=True)
         self._database_path = self._root / "telemetry.sqlite3"
         self._lock = threading.RLock()
-        # One connection for the store's lifetime: opening a fresh sqlite3
-        # connection (plus its two setup PRAGMAs) on every single call was
-        # measured as the dominant cost of a realistic run -- 138s of 279s in a
-        # 15-run profile came from sqlite3.Connection.execute alone, almost
-        # entirely reconnection overhead, not query cost. check_same_thread=False
-        # is safe here because every access below is already serialized through
-        # self._lock, not because concurrent use is otherwise fine.
+        # One connection is shared only while `_lock` is held. `check_same_thread=False`
+        # permits that serialized use; it does not make unprotected access safe.
         self._connection = sqlite3.connect(
             self._database_path, timeout=10, isolation_level=None, check_same_thread=False
         )
@@ -152,16 +147,10 @@ class TelemetryStore:
         self._initialize()
 
     def close(self) -> None:
-        """Close the persistent connection. Safe to call multiple times.
+        """Close the persistent connection; repeated calls are safe.
 
-        Not required for correctness during normal operation, but Windows
-        refuses to delete or rename a file, or its containing directory, while
-        a handle to it is open -- unlike POSIX. Confirmed in practice: a
-        multi-run benchmark's `shutil.rmtree(..., ignore_errors=True)` silently
-        left several runs' telemetry.sqlite3 behind because their store's
-        connection was still open at cleanup time. Callers that need to remove
-        a run root deterministically (test teardown, a benchmark script)
-        should call this first.
+        Call this before deterministic removal or renaming of the telemetry root
+        on platforms that retain open database handles.
         """
 
         with self._lock:
@@ -603,4 +592,4 @@ def _safe_name(value: str) -> str:
 def _atomic_write(target: Path, content: bytes) -> None:
     temporary = target.with_name(f".{target.name}.tmp")
     temporary.write_bytes(content)
-    os.replace(temporary, target)
+    replace_atomic(temporary, target)

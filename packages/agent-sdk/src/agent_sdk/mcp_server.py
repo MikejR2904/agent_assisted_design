@@ -70,7 +70,7 @@ from .telemetry import (
 from .tools import InMemoryTaskToolExecutor
 
 SERVER_NAME = "agent-design-python-runtime"
-SERVER_VERSION = "0.16.0"
+SERVER_VERSION = "0.16.1"
 
 
 def _validation_errors(error: ValidationError) -> list[dict[str, Any]]:
@@ -87,9 +87,8 @@ def _validation_errors(error: ValidationError) -> list[dict[str, Any]]:
 def create_mcp_server(run_root: Path | None = None) -> MCPServer:
     """Build the BaseAgent and typed harness MCP surface without a network listener."""
 
-    # Deferred: the mcp SDK import is expensive (~700ms, mostly its own versioned
-    # protocol-type schemas) and is only needed by callers that actually build a
-    # server, not by every `import agent_sdk`.
+    # Defer MCP initialization so ordinary SDK imports do not create runtime
+    # stores or require the optional server implementation.
     from mcp.server import MCPServer
 
     resolved_run_root = run_root or Path(os.environ.get("AGENT_RUNTIME_RUN_ROOT", ".agent-runtime"))
@@ -995,14 +994,7 @@ _default_server: MCPServer | None = None
 
 
 def __getattr__(name: str) -> Any:
-    """Construct the default MCP server lazily so importing this module has no side effect.
-
-    Building it eagerly at import time meant every ``import agent_sdk`` constructed a
-    full runtime (coordinator, telemetry store, audit store, project-state store) and
-    touched disk, regardless of whether the caller ever intended to run a server. External
-    tooling that looks up a module-level ``mcp`` object (for example ``mcp dev``/``mcp run``
-    style discovery) still finds one; it is just built on first access, not on import.
-    """
+    """Construct the default MCP server on explicit attribute access only."""
 
     global _default_server
     if name == "mcp":
@@ -1010,6 +1002,12 @@ def __getattr__(name: str) -> Any:
             _default_server = create_mcp_server()
         return _default_server
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Advertise the lazy ``mcp`` export without constructing its runtime stores."""
+
+    return sorted({*globals(), "mcp"})
 
 
 def main() -> None:

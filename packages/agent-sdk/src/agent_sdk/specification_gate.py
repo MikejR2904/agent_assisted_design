@@ -7,7 +7,6 @@ framework, updated PDF, pp. 38–39 and 48).
 
 from __future__ import annotations
 
-import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from typing import Any
 import yaml
 from pydantic import Field, model_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 from .dependency_graph import deterministic_cycles, reverse_reachable_count
 from .specifications import DocumentTree, SourceRef, SpecificationCategory
@@ -321,4 +321,4 @@ class Gate1ArtifactStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-        os.replace(temporary, target)
+        replace_atomic(temporary, target)

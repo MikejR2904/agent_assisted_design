@@ -17,7 +17,6 @@ to *raise* a single-agent route to multi-agent execution.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -26,6 +25,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
+from .atomic_io import replace_atomic
 from .contracts import AgentDefinition, ModelBinding, SkillContext, StrictModel
 from .controller_runtime import ControllerRuntime
 from .graph_agent_executor import GraphAgentBinding, GraphAgentExecutor
@@ -206,7 +206,7 @@ class OrchestrationStateStore:
         target = self._root / f"{record.orchestration_id}.json"
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(temporary, target)
+        replace_atomic(temporary, target)
 
     def load(self, orchestration_id: str) -> OrchestrationRecord:
         target = self._root / f"{orchestration_id}.json"
@@ -231,7 +231,7 @@ class OrchestrationStateStore:
             return
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_text(serialized, encoding="utf-8")
-        os.replace(temporary, target)
+        replace_atomic(temporary, target)
 
     def load_policy(self, policy_id: str) -> OrchestrationPolicy:
         target = self._policies / f"{policy_id}.json"

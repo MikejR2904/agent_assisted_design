@@ -76,10 +76,8 @@ from .telemetry import (
 from .tools import ToolExecutor, ToolInvocationContext
 from .verification import VerificationGateRegistry
 
-# Built once: AgentTurn is a fixed discriminated-union type, so its validation
-# schema never changes. Rebuilding a TypeAdapter for it on every model turn
-# measurably dominated pipeline latency (see contracts.py's schema-check cache
-# for the same class of fix).
+# AgentTurn is a fixed discriminated union, so one module-level adapter safely
+# reuses identical validation state for every untrusted model response.
 _AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
 
 

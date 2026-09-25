@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +18,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 
 
@@ -262,7 +262,7 @@ class AgentRunProfiler:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(f"{destination.suffix}.tmp")
         temporary.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(temporary, destination)
+        replace_atomic(temporary, destination)
         return destination
 
 

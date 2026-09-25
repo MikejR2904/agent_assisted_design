@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
 
 import pytest
@@ -16,6 +17,19 @@ from agent_sdk.planning import (
     SignalRole,
     TaskSignalUse,
 )
+
+
+def test_lazy_mcp_export_is_discoverable_without_import_side_effects(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    import agent_sdk.mcp_server as mcp_server
+
+    runtime_root = tmp_path / "lazy-runtime"
+    monkeypatch.setenv("AGENT_RUNTIME_RUN_ROOT", str(runtime_root))
+    module = importlib.reload(mcp_server)
+
+    assert "mcp" in dir(module)
+    assert not runtime_root.exists()
 
 
 @pytest.fixture

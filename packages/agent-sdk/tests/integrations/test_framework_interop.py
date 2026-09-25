@@ -62,6 +62,10 @@ def test_interop_envelope_derives_and_verifies_projection_digest() -> None:
         {"private-key": "must-not-cross-boundary"},
         {"PRIVATEKEY": "must-not-cross-boundary"},
         {"rawResponse": "must-not-cross-boundary"},
+        {"accessToken": "must-not-cross-boundary"},
+        {"refresh-token": "must-not-cross-boundary"},
+        {"JWT": "must-not-cross-boundary"},
+        {"clientSecret": "must-not-cross-boundary"},
         {"callback": lambda: None},
     ],
 )

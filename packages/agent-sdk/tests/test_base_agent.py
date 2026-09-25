@@ -145,6 +145,22 @@ async def test_model_turn_watchdog_has_a_stable_terminal_reason():
 
 
 @pytest.mark.anyio
+async def test_cancellation_token_stops_before_model_invocation() -> None:
+    class CancelledToken:
+        def is_cancelled(self) -> bool:
+            return True
+
+    result = await BaseAgent(
+        sample_definition(),
+        ScriptedModel([{"type": "final", "output": {"status": "complete", "findings": []}}]),
+    ).run(sample_task(), cancellation=CancelledToken())
+
+    assert result.status == "cancelled"
+    assert result.iterations == 0
+    assert result.reason == "Execution was cancelled."
+
+
+@pytest.mark.anyio
 async def test_invalid_model_turn_preserves_typed_failure_envelope() -> None:
     class InvalidTurnModel:
         async def next_turn(self, _context):

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-design-agent-sdk"
-version = "0.16.0"
+version = "0.16.1"
 description = "Extensible Python BaseAgent runtime, grounded retrieval, governed orchestration, deterministic controller, profiling, verification gates, and MCP harness for the Agent-Assisted Design framework"
 readme = "README.md"
 requires-python = ">=3.12"
