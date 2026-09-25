@@ -45,8 +45,7 @@ def _canonical_key(value: Any) -> str:
     """Normalize snake, kebab, camel, case, and separator variants deterministically."""
 
     token = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value).strip())
-    token = re.sub(r"[^A-Za-z0-9]+", "_", token).strip("_").lower()
-    return token
+    return re.sub(r"[^A-Za-z0-9]+", "_", token).strip("_").lower()
 
 
 def assert_sanitized_interop_value(value: Any, *, _depth: int = 0) -> None:
