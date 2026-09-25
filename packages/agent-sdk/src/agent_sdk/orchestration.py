@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
-import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import Field
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 from .planning import Plan, PlanValidationReport, PlanValidator
 from .shared_state import SharedSubstrateSnapshot
@@ -74,6 +75,8 @@ class ControllerRecord(StrictModel):
     run_id: str | None = None
     escalation_reason: str | None = None
     events: list[ControllerEvent] = Field(default_factory=list)
+    events_entry_count: int = Field(default=0, ge=0)
+    events_integrity_hash: str | None = None
 
 
 class ComplexityRouter:
@@ -240,39 +243,17 @@ class ControllerStateMachine:
 
 
 def _replace_with_retry(temporary: Path, target: Path, *, attempts: int = 5) -> None:
-    """Retry ``os.replace`` on a transient Windows ``PermissionError``.
+    """Retry atomic replacement after transient destination-handle failures."""
 
-    Reproduced under a rapid multi-save stress test (record_node_result-style
-    back-to-back saves): another process -- most plausibly antivirus or a search
-    indexer -- can transiently hold an open handle on a just-written destination
-    file, making ``MoveFileEx``/``os.replace`` fail with WinError 5. Pre-existing
-    in this codebase's atomic-write pattern generally, not introduced by the
-    append-only event log above; fixed here because splitting persistence into
-    two files increases save() frequency's exposure to it. POSIX ``rename`` has
-    no equivalent failure mode.
-    """
-
-    for attempt in range(attempts):
-        try:
-            os.replace(temporary, target)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.01 * (attempt + 1))
+    replace_atomic(temporary, target, attempts=attempts)
 
 
 class ControllerStateStore:
-    """Atomically persist controller records for user-visible review and resume.
+    """Persist controller metadata with a snapshot-bound append-only event log.
 
-    A naive "rewrite the whole record" save makes total bytes written across a
-    controller's lifetime O(n^2) in its event count, since every save re-serializes
-    the full history (measured: ~2x slower per save between 0 and 1000 events on an
-    events-only record). Event history is append-only on disk instead, mirroring
-    telemetry.py/audit_log.py's ledgers, so save() cost no longer grows with total
-    run history. ``ControllerRecord.events`` in memory is unaffected; only the
-    on-disk layout (a small mutable snapshot plus an append-only event log) changes,
-    and load() still returns a fully populated record.
+    Snapshots with an event hash name the durable event prefix they own. A failed
+    replacement therefore leaves a recoverable prior generation, not a record
+    combined with an uncommitted suffix. Older one-file records remain readable.
     """
 
     def __init__(self, root: Path) -> None:
@@ -283,18 +264,28 @@ class ControllerStateStore:
     def save(self, record: ControllerRecord) -> None:
         persisted = self._persisted_event_counts.get(record.controller_id)
         if persisted is None:
-            persisted = self._existing_event_count(record.controller_id)
+            persisted = self._committed_event_count(record.controller_id)
+        event_path = self._events_path(record.controller_id)
+        self._discard_uncommitted_events(record.controller_id, persisted)
         if len(record.events) < persisted:
-            # Fewer events than already on disk: this id's history restarted
-            # (e.g. a fresh ControllerStateMachine reusing an old controller_id).
-            # Rewrite the log rather than silently losing the new, shorter history.
+            # A reused controller ID has a shorter in-memory event history, so
+            # replace the sidecar before publishing the new snapshot boundary.
             self._write_events(record.controller_id, record.events)
         elif len(record.events) > persisted:
             self._append_events(record.controller_id, record.events[persisted:])
+        event_count, event_hash = _event_boundary(event_path)
+        if event_count != len(record.events):
+            raise ValueError("Controller event boundary does not match the record event count.")
         target = self._root / f"{record.controller_id}.json"
         temporary = target.with_name(f".{target.name}.tmp")
-        snapshot = record.model_copy(update={"events": []})
-        temporary.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
+        snapshot = record.model_copy(
+            update={
+                "events": [],
+                "events_entry_count": event_count,
+                "events_integrity_hash": event_hash,
+            }
+        )
+        _write_json_candidate(temporary, snapshot.model_dump_json(indent=2))
         _replace_with_retry(temporary, target)
         self._persisted_event_counts[record.controller_id] = len(record.events)
 
@@ -303,7 +294,20 @@ class ControllerStateStore:
         if not target.is_file():
             raise ValueError(f'Controller "{controller_id}" is unknown.')
         snapshot = ControllerRecord.model_validate_json(target.read_text(encoding="utf-8"))
-        events = self._read_events(controller_id)
+        if snapshot.events_integrity_hash is None:
+            self._persisted_event_counts[controller_id] = 0
+            return snapshot
+        events, event_hash = self._read_events(
+            controller_id, entry_limit=snapshot.events_entry_count
+        )
+        if (
+            len(events) != snapshot.events_entry_count
+            or event_hash != snapshot.events_integrity_hash
+        ):
+            raise ValueError(
+                f'Controller "{controller_id}" event history failed integrity verification.'
+            )
+        _validate_event_sequence(events)
         record = snapshot.model_copy(update={"events": events})
         self._persisted_event_counts[controller_id] = len(events)
         return record
@@ -327,20 +331,101 @@ class ControllerStateStore:
             for event in events:
                 handle.write(event.model_dump_json())
                 handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         _replace_with_retry(temporary, path)
 
-    def _read_events(self, controller_id: str) -> list[ControllerEvent]:
+    def _read_events(
+        self, controller_id: str, *, entry_limit: int | None = None
+    ) -> tuple[list[ControllerEvent], str]:
         path = self._events_path(controller_id)
         if not path.is_file():
-            return []
+            return [], _event_hash([])
         with path.open(encoding="utf-8") as handle:
-            return [ControllerEvent.model_validate_json(line) for line in handle if line.strip()]
+            events: list[ControllerEvent] = []
+            for line in handle:
+                if not line.strip():
+                    continue
+                if entry_limit is not None and len(events) >= entry_limit:
+                    break
+                events.append(ControllerEvent.model_validate_json(line))
+        return events, _event_hash(events)
 
-    def _existing_event_count(self, controller_id: str) -> int:
-        # Only the count is needed here (to know where to resume appending), so
-        # count non-empty lines directly instead of parsing each into a model.
-        path = self._events_path(controller_id)
-        if not path.is_file():
+    def _committed_event_count(self, controller_id: str) -> int:
+        target = self._root / f"{controller_id}.json"
+        if not target.is_file():
             return 0
+        snapshot = ControllerRecord.model_validate_json(target.read_text(encoding="utf-8"))
+        if snapshot.events_integrity_hash is None:
+            return 0
+        events, event_hash = self._read_events(
+            controller_id, entry_limit=snapshot.events_entry_count
+        )
+        if (
+            len(events) != snapshot.events_entry_count
+            or event_hash != snapshot.events_integrity_hash
+        ):
+            raise ValueError(
+                f'Controller "{controller_id}" event history failed integrity verification.'
+            )
+        return len(events)
+
+    def _discard_uncommitted_events(self, controller_id: str, committed_count: int) -> None:
+        path = self._events_path(controller_id)
+        if _nonempty_event_line_count(path) <= committed_count:
+            return
+        events, _event_hash_value = self._read_events_from_path(path, entry_limit=committed_count)
+        self._write_events(controller_id, events)
+
+    @staticmethod
+    def _read_events_from_path(
+        path: Path, *, entry_limit: int | None = None
+    ) -> tuple[list[ControllerEvent], str]:
+        if not path.is_file():
+            return [], _event_hash([])
         with path.open(encoding="utf-8") as handle:
-            return sum(1 for line in handle if line.strip())
+            events: list[ControllerEvent] = []
+            for line in handle:
+                if not line.strip():
+                    continue
+                if entry_limit is not None and len(events) >= entry_limit:
+                    break
+                events.append(ControllerEvent.model_validate_json(line))
+        return events, _event_hash(events)
+
+
+def _event_boundary(path: Path) -> tuple[int, str]:
+    if not path.is_file():
+        return 0, _event_hash([])
+    with path.open(encoding="utf-8") as handle:
+        events = [ControllerEvent.model_validate_json(line) for line in handle if line.strip()]
+    return len(events), _event_hash(events)
+
+
+def _nonempty_event_line_count(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    with path.open(encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def _event_hash(events: list[ControllerEvent]) -> str:
+    digest = hashlib.sha256()
+    for event in events:
+        digest.update(event.model_dump_json().encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _validate_event_sequence(events: list[ControllerEvent]) -> None:
+    expected = list(range(1, len(events) + 1))
+    actual = [event.sequence for event in events]
+    if actual != expected:
+        raise ValueError("Controller event history has non-contiguous sequence numbers.")
+
+
+def _write_json_candidate(path: Path, content: str) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())

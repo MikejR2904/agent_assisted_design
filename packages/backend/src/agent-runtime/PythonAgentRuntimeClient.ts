@@ -362,10 +362,15 @@ export class PythonAgentRuntimeClient {
     });
   }
 
-  async validateGateOne(specification: JsonObject, requiredCategories: readonly string[]): Promise<PythonAgentRuntimeResponse> {
+  async validateGateOne(
+    specification: JsonObject,
+    requiredCategories: readonly string[],
+    semanticFindings: readonly JsonObject[] = [],
+  ): Promise<PythonAgentRuntimeResponse> {
     return this.callPythonTool('validate_gate_one', {
       specification,
       required_categories: requiredCategories,
+      semantic_findings: semanticFindings,
     });
   }
 

@@ -7,7 +7,8 @@ framework, updated PDF, pp. 38–39 and 48).
 
 from __future__ import annotations
 
-import os
+from collections import Counter
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,9 @@ from typing import Any
 import yaml
 from pydantic import Field, model_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
-from .dependency_graph import deterministic_cycles, reverse_reachable_count
+from .dependency_graph import deterministic_cycles, reverse_reachable_count, reverse_reachable_nodes
 from .specifications import DocumentTree, SourceRef, SpecificationCategory
 
 
@@ -82,10 +84,57 @@ class Gap(StrictModel):
     model_analysis_required: bool = False
 
 
+class SemanticGapFinding(StrictModel):
+    """An untrusted semantic finding eligible for deterministic Gate 1 admission.
+
+    The SDK does not infer semantic ambiguity from prose. A host-selected analysis
+    component may propose a finding, but the gate admits it only when every cited
+    requirement and source reference belongs to the frozen specification.
+    """
+
+    schema_version: str = "semantic-gap-finding-v1"
+    finding_id: str = Field(min_length=1, max_length=128)
+    type: GapType
+    requirement_ids: list[str] = Field(min_length=1, max_length=32)
+    source_refs: list[SourceRef] = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=4_000)
+    suggested_fix: str = Field(min_length=1, max_length=2_000)
+    severity: GapSeverity = GapSeverity.IMPORTANT
+    analysis_provider: str = Field(min_length=1, max_length=128)
+    analysis_model: str | None = Field(default=None, min_length=1, max_length=256)
+    analysis_receipt_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def semantic_findings_are_bounded_and_noncritical(self) -> SemanticGapFinding:
+        semantic_types = {
+            GapType.AMBIGUITY,
+            GapType.INCONSISTENCY,
+            GapType.UNSTATED_ASSUMPTION,
+        }
+        if self.type not in semantic_types:
+            raise ValueError("Semantic findings may use only semantic GapType values.")
+        if len(self.requirement_ids) != len(set(self.requirement_ids)):
+            raise ValueError("Semantic finding requirement_ids must be unique.")
+        if self.type is GapType.INCONSISTENCY and len(self.requirement_ids) < 2:
+            raise ValueError("Inconsistency findings must cite at least two requirements.")
+        if self.severity is GapSeverity.CRITICAL:
+            raise ValueError("Semantic findings cannot assign CRITICAL severity.")
+        return self
+
+
+class SemanticGapAdmission(StrictModel):
+    """Deterministic evidence of whether an untrusted semantic finding was admitted."""
+
+    finding_id: str = Field(min_length=1)
+    accepted: bool
+    reason: str = Field(min_length=1)
+
+
 class GapReport(StrictModel):
     schema_version: str = "gap-report-v1"
     document_version: str = Field(min_length=1)
     gaps: list[Gap] = Field(default_factory=list)
+    semantic_admissions: list[SemanticGapAdmission] = Field(default_factory=list)
 
     def summary(self) -> dict[str, int]:
         return {
@@ -93,6 +142,10 @@ class GapReport(StrictModel):
             "critical": sum(item.severity is GapSeverity.CRITICAL for item in self.gaps),
             "important": sum(item.severity is GapSeverity.IMPORTANT for item in self.gaps),
             "optional": sum(item.severity is GapSeverity.OPTIONAL for item in self.gaps),
+            "semantic_findings_accepted": sum(item.accepted for item in self.semantic_admissions),
+            "semantic_findings_rejected": sum(
+                not item.accepted for item in self.semantic_admissions
+            ),
         }
 
 
@@ -126,6 +179,7 @@ class SpecificationGate:
         specification: UnifiedSpecification,
         *,
         required_categories: set[SpecificationCategory],
+        semantic_findings: Sequence[SemanticGapFinding] = (),
     ) -> tuple[DependencyGraph, GapReport]:
         requirement_ids = {requirement.id for requirement in specification.requirements}
         present_categories = {document.category for document in specification.documents}
@@ -220,7 +274,118 @@ class SpecificationGate:
                     blast_radius=len(cycle),
                 )
             )
-        return graph, GapReport(document_version=specification.version, gaps=gaps)
+        semantic_gaps, semantic_admissions = self.admit_semantic_findings(
+            specification,
+            graph,
+            semantic_findings,
+        )
+        return graph, GapReport(
+            document_version=specification.version,
+            gaps=[*gaps, *semantic_gaps],
+            semantic_admissions=semantic_admissions,
+        )
+
+    def admit_semantic_findings(
+        self,
+        specification: UnifiedSpecification,
+        graph: DependencyGraph,
+        findings: Sequence[SemanticGapFinding],
+    ) -> tuple[list[Gap], list[SemanticGapAdmission]]:
+        """Mechanically bind host-proposed semantic findings to frozen requirement evidence.
+
+        This method verifies references, ordering, and receipt identity. It does not
+        decide whether prose is truly ambiguous or inconsistent; that remains the
+        explicitly marked analysis-provider claim in the admitted gap.
+        """
+
+        requirements = {requirement.id: requirement for requirement in specification.requirements}
+        graph_edges = [(edge.source_id, edge.target_id) for edge in graph.edges]
+        admitted: list[Gap] = []
+        admissions: list[SemanticGapAdmission] = []
+        seen_ids: set[str] = set()
+        for finding in sorted(findings, key=lambda item: item.finding_id):
+            if finding.finding_id in seen_ids:
+                admissions.append(
+                    SemanticGapAdmission(
+                        finding_id=finding.finding_id,
+                        accepted=False,
+                        reason="Semantic finding IDs must be unique per Gate 1 evaluation.",
+                    )
+                )
+                continue
+            seen_ids.add(finding.finding_id)
+            missing_requirements = sorted(set(finding.requirement_ids) - set(requirements))
+            if missing_requirements:
+                admissions.append(
+                    SemanticGapAdmission(
+                        finding_id=finding.finding_id,
+                        accepted=False,
+                        reason=(
+                            "Semantic finding cites unknown requirements: "
+                            f"{', '.join(missing_requirements)}."
+                        ),
+                    )
+                )
+                continue
+            allowed_sources = Counter(
+                _source_ref_key(source)
+                for requirement_id in finding.requirement_ids
+                for source in requirements[requirement_id].source_refs
+            )
+            cited_sources = Counter(_source_ref_key(source) for source in finding.source_refs)
+            if any(count > allowed_sources[key] for key, count in cited_sources.items()):
+                admissions.append(
+                    SemanticGapAdmission(
+                        finding_id=finding.finding_id,
+                        accepted=False,
+                        reason=(
+                            "Semantic finding cites a source reference not bound to its "
+                            "declared requirements."
+                        ),
+                    )
+                )
+                continue
+            categories = sorted(
+                {
+                    requirements[requirement_id].category
+                    for requirement_id in finding.requirement_ids
+                },
+                key=lambda category: category.value,
+            )
+            locations = [
+                *finding.requirement_ids,
+                *[f"{source.document_id}:{source.location}" for source in finding.source_refs],
+            ]
+            affected_requirements = set(finding.requirement_ids)
+            for requirement_id in finding.requirement_ids:
+                affected_requirements.update(
+                    reverse_reachable_nodes(graph.nodes, graph_edges, requirement_id)
+                )
+            blast_radius = len(affected_requirements)
+            admitted.append(
+                Gap(
+                    type=finding.type,
+                    locations=locations,
+                    description=finding.description,
+                    categories_touched=categories,
+                    suggested_fix=finding.suggested_fix,
+                    severity=finding.severity,
+                    source=(
+                        "semantic-analysis:"
+                        f"{finding.analysis_provider}:{finding.analysis_receipt_digest}"
+                    ),
+                    blast_radius=blast_radius,
+                    model_analysis_required=True,
+                )
+            )
+            admissions.append(
+                SemanticGapAdmission(
+                    finding_id=finding.finding_id,
+                    accepted=True,
+                    reason="Finding references only frozen requirement and source evidence.",
+                )
+            )
+        return admitted, admissions
 
     def soft_lock(
         self,
@@ -251,6 +416,18 @@ class SpecificationGate:
                 update={"soft_locked": True, "user_override_with_gaps": bool(report.gaps)}
             ),
         )
+
+
+def _source_ref_key(source: SourceRef) -> tuple[str, str, str, str, str]:
+    """Return the complete immutable source identity used for Gate 1 admission."""
+
+    return (
+        source.document_id,
+        source.relative_path,
+        source.source_hash,
+        source.format.value,
+        source.location,
+    )
 
 
 def classify_version_change(
@@ -321,4 +498,4 @@ class Gate1ArtifactStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-        os.replace(temporary, target)
+        replace_atomic(temporary, target)

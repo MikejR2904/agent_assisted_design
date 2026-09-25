@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +16,7 @@ from typing import Any, Protocol
 
 from pydantic import Field
 
+from .atomic_io import replace_atomic
 from .contracts import (
     AgentPrompt,
     ContextProjectionMetadata,
@@ -99,7 +99,7 @@ class FileToolResultJournal(InMemoryToolResultJournal):
         target = self._root / f"{handle.handle_id}.json"
         temporary = target.with_name(f".{target.name}.tmp")
         temporary.write_text(_canonical_json(payload), encoding="utf-8")
-        os.replace(temporary, target)
+        replace_atomic(temporary, target)
         return handle
 
     def read(self, handle_id: str) -> dict[str, Any]:

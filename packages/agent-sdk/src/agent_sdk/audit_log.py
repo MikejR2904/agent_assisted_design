@@ -9,12 +9,14 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
 from pydantic import Field, field_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 
 
@@ -44,6 +46,9 @@ class AuditTranscriptStore:
     intentionally external to ProjectState and never feeds raw history into ModelContext.
     """
 
+    _append_locks: dict[Path, threading.RLock] = {}
+    _append_locks_guard = threading.Lock()
+
     def __init__(
         self, root: Path, *, max_payload_chars: int = 8_192, max_open_handles: int = 32
     ) -> None:
@@ -56,15 +61,8 @@ class AuditTranscriptStore:
         self._max_payload_chars = max_payload_chars
         self._max_open_handles = max_open_handles
         self._lock = threading.RLock()
-        # LRU pool of open append handles, keyed by run_id: append() is called
-        # once per audit event and was measured opening its file every single
-        # time (each open ~4ms on this machine, antivirus/indexer interference
-        # being the usual cause) -- the same reconnection-overhead pattern
-        # fixed for TelemetryStore's SQLite connection, generalized with
-        # eviction since this store has one growing file per run_id rather
-        # than a single database for its whole lifetime. Bounded so a
-        # long-running host cycling through many runs doesn't accumulate
-        # unbounded open file handles.
+        # A bounded LRU avoids repeated opens for active runs without allowing a
+        # long-lived host to retain one descriptor for every historical run.
         self._handles: OrderedDict[str, IO[bytes]] = OrderedDict()
 
     def _handle_for(self, run_id: str) -> IO[bytes]:
@@ -89,31 +87,30 @@ class AuditTranscriptStore:
         iteration: int | None = None,
     ) -> AuditLogEntry:
         with self._lock:
-            # "a+b" lets one handle both read the tail (via explicit seek) and
-            # append the new entry -- append-mode writes always land at the
-            # true end regardless of prior seeks.
-            handle = self._handle_for(run_id)
-            handle.seek(0, os.SEEK_END)
-            end = handle.tell()
-            previous, sequence = _parse_tail(handle, end)
-            prepared = AuditLogEntry(
-                sequence=sequence + 1,
-                event_type=event_type,
-                occurred_at_utc=datetime.now(UTC).isoformat(),
-                run_id=run_id,
-                task_id=task_id,
-                iteration=iteration,
-                payload=_bound_and_redact(payload, self._max_payload_chars),
-                previous_hash=previous,
-            )
-            complete = prepared.model_copy(
-                update={"integrity_hash": _hash(prepared.model_dump(mode="json"))}
-            )
-            handle.write(complete.model_dump_json().encode("utf-8"))
-            handle.write(b"\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-            return complete
+            with self._append_transaction(run_id):
+                # Append-mode writes use the true end even after tail inspection.
+                handle = self._handle_for(run_id)
+                handle.seek(0, os.SEEK_END)
+                end = handle.tell()
+                previous, sequence = _parse_tail(handle, end)
+                prepared = AuditLogEntry(
+                    sequence=sequence + 1,
+                    event_type=event_type,
+                    occurred_at_utc=datetime.now(UTC).isoformat(),
+                    run_id=run_id,
+                    task_id=task_id,
+                    iteration=iteration,
+                    payload=_bound_and_redact(payload, self._max_payload_chars),
+                    previous_hash=previous,
+                )
+                complete = prepared.model_copy(
+                    update={"integrity_hash": _hash(prepared.model_dump(mode="json"))}
+                )
+                handle.write(complete.model_dump_json().encode("utf-8"))
+                handle.write(b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+                return complete
 
     def list_entries(
         self,
@@ -226,20 +223,37 @@ class AuditTranscriptStore:
         return self._root / f"{_safe_name(run_id)}.jsonl"
 
     def close(self) -> None:
-        """Release every cached append handle. Safe to call multiple times.
+        """Close cached append handles; repeated calls are safe.
 
-        Not required for correctness during normal operation (handles are
-        released on eviction or process exit either way), but Windows refuses
-        to delete or rename a file, or its containing directory, while a
-        handle to it is still open -- unlike POSIX. Callers that need to
-        remove a run root deterministically (test teardown, a benchmark
-        script) should call this first.
+        Call this before deterministic removal or renaming of the audit root on
+        platforms that retain open-file handles.
         """
 
         with self._lock:
             for handle in self._handles.values():
                 handle.close()
             self._handles.clear()
+
+    @contextmanager
+    def _append_transaction(self, run_id: str) -> Iterator[None]:
+        """Lock one tail-read/hash/write/fsync transaction for a run.
+
+        A process-local lock coordinates separate store instances. A companion
+        lock file extends serialization to other processes sharing this run root,
+        preventing two writers from deriving the same sequence and predecessor.
+        """
+
+        path = self._jsonl_path(run_id).resolve()
+        with self._local_append_lock(path), _interprocess_lock(path.with_suffix(".lock")):
+            yield
+
+    @classmethod
+    @contextmanager
+    def _local_append_lock(cls, path: Path) -> Iterator[None]:
+        with cls._append_locks_guard:
+            lock = cls._append_locks.setdefault(path, threading.RLock())
+        with lock:
+            yield
 
 
 def _bound_and_redact(value: Any, max_chars: int) -> dict[str, Any]:
@@ -298,6 +312,37 @@ def _parse_tail(handle: Any, end: int) -> tuple[str | None, int]:
     return tail.integrity_hash, tail.sequence
 
 
+@contextmanager
+def _interprocess_lock(path: Path) -> Iterator[None]:
+    """Serialize one audit append across processes without widening tool authority."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            if not handle.read(1):
+                handle.seek(0)
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
@@ -315,4 +360,4 @@ def _safe_name(value: str) -> str:
 def _atomic_write(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(content, encoding="utf-8")
-    os.replace(temporary, path)
+    replace_atomic(temporary, path)

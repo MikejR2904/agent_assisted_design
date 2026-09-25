@@ -50,7 +50,15 @@ from .metrics import (
     record_terminal_agent_metrics,
     register_standard_metric_definitions,
 )
-from .model import AgentModel, ModelContext, ModelTurnResponse, ProviderContinuation, ProviderUsage
+from .model import (
+    AgentModel,
+    ModelContext,
+    ModelTurnResponse,
+    ProviderContinuation,
+    ProviderToolResult,
+    ProviderToolResultConsumer,
+    ProviderUsage,
+)
 from .profiler import (
     AgentRunProfiler,
     ProfileSpanHandle,
@@ -76,10 +84,8 @@ from .telemetry import (
 from .tools import ToolExecutor, ToolInvocationContext
 from .verification import VerificationGateRegistry
 
-# Built once: AgentTurn is a fixed discriminated-union type, so its validation
-# schema never changes. Rebuilding a TypeAdapter for it on every model turn
-# measurably dominated pipeline latency (see contracts.py's schema-check cache
-# for the same class of fix).
+# AgentTurn is a fixed discriminated union, so one module-level adapter safely
+# reuses identical validation state for every untrusted model response.
 _AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
 
 
@@ -134,6 +140,14 @@ class ToolCallOutcome:
     episode_kind: str | None = None
     terminal_status: AgentRunStatus | None = None
     terminal_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolBatchExecution:
+    """Completed batch projections for state reduction and an optional provider handoff."""
+
+    observations: tuple[ModelObservation, ...]
+    provider_results: tuple[ProviderToolResult, ...]
 
 
 class BaseAgent:
@@ -582,6 +596,8 @@ class BaseAgent:
                                 episodes=(),
                                 continuation=continuation,
                                 projection=projection.metadata,
+                                model_binding=self.definition.model_binding,
+                                output_schema=self.definition.output_schema,
                             )
                         ),
                         self.watchdog_policy.model_turn_timeout_seconds,
@@ -690,12 +706,56 @@ class BaseAgent:
             )
             if isinstance(outcome, AgentResult):
                 return self._with_projection_history(outcome, projection_history)
-            observations.extend(outcome)
+            observations.extend(outcome.observations)
             protected_episode_ids = frozenset(
                 observation.episode_id
-                for observation in outcome
+                for observation in outcome.observations
                 if observation.episode_id is not None
             )
+            if isinstance(self.model, ProviderToolResultConsumer) and continuation is not None:
+                try:
+                    continuation = await self._await_with_watchdog(
+                        self.model.accept_tool_results(continuation, outcome.provider_results),
+                        self.watchdog_policy.model_turn_timeout_seconds,
+                        deadline,
+                    )
+                except TimeoutError:
+                    return self._terminate(
+                        AgentRunStatus.FAILED,
+                        task,
+                        iteration,
+                        "WATCHDOG_MODEL_TIMEOUT",
+                        prompt,
+                        episodes,
+                        events,
+                        emit,
+                        projection_history,
+                    )
+                except Exception as error:
+                    return self._terminate(
+                        AgentRunStatus.FAILED,
+                        task,
+                        iteration,
+                        f"MODEL_TOOL_CONTINUATION_FAILED: {error}",
+                        prompt,
+                        episodes,
+                        events,
+                        emit,
+                        projection_history,
+                    )
+                emit(
+                    "provider-tool-results-forwarded",
+                    iteration,
+                    outcomes=[
+                        {
+                            "tool_call_id": result.call_id,
+                            "tool": result.name,
+                            "status": result.status,
+                            "truncated": result.truncated,
+                        }
+                        for result in outcome.provider_results
+                    ],
+                )
 
         return self._terminate(
             AgentRunStatus.FAILED,
@@ -879,7 +939,7 @@ class BaseAgent:
         events: list[AgentLifecycleEvent],
         emit: Callable[..., None],
         deadline: float | None,
-    ) -> list[ModelObservation] | AgentResult:
+    ) -> ToolBatchExecution | AgentResult:
         emit("tool-batch-requested", iteration, call_ids=[call.id for call in batch.calls])
         pending = {call.id: call for call in batch.calls}
         outcomes: dict[str, ToolCallOutcome] = {}
@@ -1007,7 +1067,10 @@ class BaseAgent:
                 events,
                 emit,
             )
-        return [item.observation for item in ordered_outcomes]
+        return ToolBatchExecution(
+            observations=tuple(item.observation for item in ordered_outcomes),
+            provider_results=tuple(self._provider_tool_result(item) for item in ordered_outcomes),
+        )
 
     async def _execute_profiled_tool_call(
         self,
@@ -1259,6 +1322,32 @@ class BaseAgent:
         return (
             f'Tool "{call.name}" {result.status}: '
             f"{result.error or 'no reason supplied'}; full result is available via {handle_id}."
+        )
+
+    def _provider_tool_result(self, outcome: ToolCallOutcome) -> ProviderToolResult:
+        """Create the only bounded raw-result path used by provider continuations.
+
+        The normal next ``ModelContext`` remains state-first. A provider that issued a
+        function call can consume this one-time projection to resolve that call in its
+        native protocol; it is never appended to the SDK's ordinary observations.
+        """
+
+        content = json.dumps(
+            outcome.result.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        limit = self.context_projector.policy.tool_result_preview_chars
+        truncated = len(content) > limit
+        if truncated:
+            content = f"{content[:limit]}…[truncated]"
+        return ProviderToolResult(
+            call_id=outcome.call.id,
+            name=outcome.call.name,
+            status=outcome.result.status,
+            content=content,
+            truncated=truncated,
         )
 
     def _effective_call(

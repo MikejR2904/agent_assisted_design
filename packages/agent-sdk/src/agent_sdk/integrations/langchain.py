@@ -28,7 +28,6 @@ from ..tools import ToolExecutor, ToolInvocationContext
 from ._utils import require_optional_module
 from .contracts import assert_sanitized_interop_value
 
-# Built once: see base_agent.py's identical rationale for caching this adapter.
 _AGENT_TURN_ADAPTER: TypeAdapter[AgentTurn] = TypeAdapter(AgentTurn)
 
 

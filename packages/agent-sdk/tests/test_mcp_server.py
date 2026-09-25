@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
 
 import pytest
@@ -16,6 +17,19 @@ from agent_sdk.planning import (
     SignalRole,
     TaskSignalUse,
 )
+
+
+def test_lazy_mcp_export_is_discoverable_without_import_side_effects(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    import agent_sdk.mcp_server as mcp_server
+
+    runtime_root = tmp_path / "lazy-runtime"
+    monkeypatch.setenv("AGENT_RUNTIME_RUN_ROOT", str(runtime_root))
+    module = importlib.reload(mcp_server)
+
+    assert "mcp" in dir(module)
+    assert not runtime_root.exists()
 
 
 @pytest.fixture
@@ -166,6 +180,53 @@ async def test_mcp_server_runs_a_structured_deterministic_agent_task(client: Cli
     assert payload["result"]["output"]["findings"] == ["ready is preserved"]
     assert payload["result"]["project_state"]["revision"] == 2
     assert payload["result"]["project_state"]["work_items"][0]["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_mcp_gate_one_admits_only_source_bound_semantic_findings(client: Client):
+    source = {
+        "document_id": "REQ-READY",
+        "relative_path": "functional/requirements.md",
+        "source_hash": "source-hash",
+        "format": "md",
+        "location": "line:1",
+    }
+    response = await client.call_tool(
+        "validate_gate_one",
+        {
+            "specification": {
+                "version": "1.0.0",
+                "documents": [],
+                "requirements": [
+                    {
+                        "id": "REQ-READY",
+                        "category": "functional",
+                        "text": "The interface shall assert ready.",
+                        "source_refs": [source],
+                        "acceptance_checks": ["test-ready"],
+                    }
+                ],
+            },
+            "required_categories": [],
+            "semantic_findings": [
+                {
+                    "finding_id": "missing-ready-condition",
+                    "type": "ambiguity",
+                    "requirement_ids": ["REQ-READY"],
+                    "source_refs": [source],
+                    "description": "The ready assertion condition is unspecified.",
+                    "suggested_fix": "Declare the condition and cycle.",
+                    "analysis_provider": "host-analysis",
+                    "analysis_receipt_digest": "c" * 64,
+                }
+            ],
+        },
+    )
+
+    payload = response.structured_content
+    assert payload["ok"] is True
+    assert payload["summary"]["semantic_findings_accepted"] == 1
+    assert payload["gap_report"]["gaps"][-1]["type"] == "ambiguity"
 
 
 @pytest.mark.anyio

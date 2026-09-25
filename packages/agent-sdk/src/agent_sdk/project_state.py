@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import Field, field_validator, model_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel, ToolCall, ToolExecutionResult, ToolResultHandle
 
 
@@ -610,7 +610,7 @@ class FileProjectStateStore(InMemoryProjectStateStore):
     def _write_json(path: Path, value: dict[str, Any]) -> None:
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_text(_canonical_json(value), encoding="utf-8")
-        os.replace(temporary, path)
+        replace_atomic(temporary, path)
 
 
 def make_project_state(

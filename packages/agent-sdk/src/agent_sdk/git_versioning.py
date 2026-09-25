@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import Field
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 from .specification_gate import DependencyGraph, GapReport, UnifiedSpecification, VersionMetadata
 
@@ -559,4 +560,4 @@ def _atomic_json(target: Path, value: dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f".{target.name}.tmp")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(temporary, target)
+    replace_atomic(temporary, target)

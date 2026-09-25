@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import Field, model_validator
 
+from .atomic_io import replace_atomic
 from .contracts import StrictModel
 
 
@@ -254,7 +254,7 @@ class SharedStateStore:
             json.dumps(state.snapshot_state(), sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
-        os.replace(temporary, target)
+        replace_atomic(temporary, target)
 
     def load(self, run_id: str) -> RunSharedState:
         target = self._root / f"{run_id}.json"

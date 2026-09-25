@@ -9,8 +9,10 @@ from docx import Document
 
 from agent_sdk.context_selection import DesignStage, TaskAwareContextSelector
 from agent_sdk.specification_gate import (
+    GapType,
     Gate1ArtifactStore,
     RequirementEntry,
+    SemanticGapFinding,
     SpecificationGate,
     UnifiedSpecification,
     VersionMetadata,
@@ -295,6 +297,76 @@ def test_gate_one_counts_transitive_dependents_for_missing_requirement():
         gap for gap in report.gaps if gap.locations == ["REQ-A", "REQ-MISSING"]
     )
     assert missing_dependency.blast_radius == 3
+
+
+def test_gate_one_admits_only_semantic_findings_bound_to_frozen_requirement_sources():
+    source = SourceRef(
+        document_id="REQ-FUNC-001",
+        relative_path="functional/requirements.md",
+        source_hash="source-hash",
+        format=DocumentFormat.MD,
+        location="line:1",
+    )
+    specification = UnifiedSpecification(
+        version="1.0.0",
+        documents=[],
+        requirements=[
+            RequirementEntry(
+                id="REQ-A",
+                category=SpecificationCategory.FUNCTIONAL,
+                text="The interface shall assert ready.",
+                source_refs=[source],
+                acceptance_checks=["test-a"],
+            ),
+            RequirementEntry(
+                id="REQ-B",
+                category=SpecificationCategory.FUNCTIONAL,
+                text="The interface shall deassert ready.",
+                source_refs=[source],
+                dependencies=["REQ-A"],
+                acceptance_checks=["test-b"],
+            ),
+        ],
+    )
+    valid = SemanticGapFinding(
+        finding_id="ambiguity-ready",
+        type=GapType.AMBIGUITY,
+        requirement_ids=["REQ-A"],
+        source_refs=[source],
+        description="The ready assertion condition is unspecified.",
+        suggested_fix="State the cycle and condition for ready assertion.",
+        analysis_provider="host-selected-analysis",
+        analysis_model="pinned-model",
+        analysis_receipt_digest="a" * 64,
+    )
+    unbound_source = source.model_copy(update={"source_hash": "other-hash"})
+    invalid = SemanticGapFinding(
+        finding_id="unbound-source",
+        type=GapType.INCONSISTENCY,
+        requirement_ids=["REQ-A", "REQ-B"],
+        source_refs=[unbound_source],
+        description="An analyzer claimed these requirements conflict.",
+        suggested_fix="Review the two statements.",
+        analysis_provider="host-selected-analysis",
+        analysis_receipt_digest="b" * 64,
+    )
+
+    _graph, report = SpecificationGate().validate(
+        specification,
+        required_categories=set(),
+        semantic_findings=[invalid, valid],
+    )
+
+    admitted = next(gap for gap in report.gaps if gap.type is GapType.AMBIGUITY)
+    assert admitted.model_analysis_required is True
+    assert admitted.blast_radius == 2
+    assert admitted.source == f"semantic-analysis:host-selected-analysis:{'a' * 64}"
+    assert [(item.finding_id, item.accepted) for item in report.semantic_admissions] == [
+        ("ambiguity-ready", True),
+        ("unbound-source", False),
+    ]
+    assert report.summary()["semantic_findings_accepted"] == 1
+    assert report.summary()["semantic_findings_rejected"] == 1
 
 
 def test_gate_one_version_preview_marks_existing_requirement_change_major():

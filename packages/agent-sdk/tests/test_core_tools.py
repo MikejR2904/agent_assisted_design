@@ -83,6 +83,26 @@ async def test_exact_edit_rejects_ambiguous_replacement(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_notebook_edit_rejects_unbounded_sparse_cell_index(tmp_path: Path) -> None:
+    tools = CoreToolDispatcher(
+        CoreToolServices(
+            root=tmp_path,
+            artifacts=ArtifactStore(tmp_path),
+            declared_output_paths=("draft.ipynb",),
+        )
+    )
+
+    result = await tools.execute(
+        "notebook_edit",
+        {"path": "draft.ipynb", "cell_index": 2_001, "new_source": "print('bounded')"},
+    )
+
+    assert result.status == "failed"
+    assert "between 0 and 2000" in (result.error or "")
+    assert not (tmp_path / "draft.ipynb").exists()
+
+
+@pytest.mark.anyio
 async def test_grep_enforces_regex_deadline_and_aggregate_scan_budget(tmp_path: Path) -> None:
     (tmp_path / "catastrophic.txt").write_text("a" * 40 + "!", encoding="utf-8")
     (tmp_path / "second.txt").write_text("beta", encoding="utf-8")

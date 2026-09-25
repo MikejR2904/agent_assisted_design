@@ -4,13 +4,27 @@ from agent_sdk.memory import (
     CompactionStatus,
     CompactionStrategy,
     InMemoryEpisodeStore,
+    LexicalEpisodeRelevanceScorer,
     PaskCompactionPolicy,
 )
+from agent_sdk.optimization import PckpStatus
 
 
 def _closed_exploration(store: InMemoryEpisodeStore, content: dict[str, str]):
     episode = store.open_exploratory("worker", content=content)
     return store.close(episode.id, description="Exploratory specification evidence.")
+
+
+def test_lexical_relevance_scorer_uses_unique_query_term_coverage():
+    store = InMemoryEpisodeStore()
+    episode = _closed_exploration(
+        store,
+        {"text": "reset synchronizer protects metastability in the destination domain"},
+    )
+
+    score = LexicalEpisodeRelevanceScorer().score("reset reset synchronizer protocol", episode)
+
+    assert score == 2 / 3
 
 
 def test_pask_retains_relevant_action_and_its_dependency_closure():
@@ -105,3 +119,24 @@ def test_pask_access_frequency_is_harness_owned_and_changes_score_not_safety():
     selected = next(item for item in utilities if item["episode_id"] == frequently_used.id)
     assert selected["frequency"] == 1.0
     assert noise.id in result.compacted_episode_ids
+
+
+def test_exact_pckp_compaction_records_a_bounded_anytime_certificate():
+    store = InMemoryEpisodeStore(compaction_policy=PaskCompactionPolicy(exact_max_branch_nodes=1))
+    left = _closed_exploration(store, {"text": "left dependency evidence " * 20})
+    right = _closed_exploration(store, {"text": "right dependency evidence " * 20})
+    joint = store.open_action(
+        "worker",
+        [left.id, right.id],
+        content={"text": "joint verification depends on both sources " * 20},
+    )
+    store.close(joint.id)
+
+    result = store.compact(50, relevance_query="joint verification")
+
+    solver = result.dossier["solver"]
+    assert result.strategy is CompactionStrategy.EXACT_PCKP
+    assert result.dossier["branch_node_limit"] == 1
+    assert solver["status"] == PckpStatus.BEST_EFFORT.value
+    assert solver["branch_nodes"] == 1
+    assert result.dossier["guarantee"] == "feasible best-effort selection with explicit bound"

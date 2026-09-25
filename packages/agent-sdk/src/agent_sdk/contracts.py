@@ -351,6 +351,7 @@ class AgentLifecycleEvent(StrictModel):
         "tool-batch-completed",
         "tool-requested",
         "tool-completed",
+        "provider-tool-results-forwarded",
         "output-rejected",
         "verification-completed",
         "terminated",
@@ -398,13 +399,12 @@ def validate_candidate_output(definition: AgentDefinition, output: Any) -> None:
 
 
 def _validate_json_schema(schema: dict[str, Any], label: str) -> None:
-    # Schema literals are static and constructed repeatedly (e.g. once per
-    # AgentDefinition built by a factory function), but meta-schema validation
-    # is expensive; memoize it by canonical content instead of re-running the
-    # full Draft 2020-12 meta-schema walk on identical input every time.
-    canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"), default=str)
+    canonical = _canonical_json_schema(schema)
     try:
-        _check_schema_cached(canonical)
+        if canonical is None:
+            Draft202012Validator.check_schema(schema)
+        else:
+            _check_schema_cached(canonical)
     except SchemaError as error:
         raise ValueError(
             f"{label} is not a valid Draft 2020-12 JSON Schema: {error.message}"
@@ -422,13 +422,10 @@ def _validator_for(canonical_schema: str) -> Draft202012Validator:
 
 
 def _validate_instance(schema: dict[str, Any], instance: Any, label: str) -> None:
-    # Same rationale as _check_schema_cached: schema is typically a static,
-    # repeatedly-reused literal (a tool's input_schema, an agent's output_schema),
-    # but building a Validator (ref resolution, format registration) is expensive
-    # and was previously redone from scratch on every single tool call and turn.
-    canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"), default=str)
+    canonical = _canonical_json_schema(schema)
     try:
-        _validator_for(canonical).validate(instance)
+        validator = Draft202012Validator(schema) if canonical is None else _validator_for(canonical)
+        validator.validate(instance)
     except Exception as error:
         raise AgentSdkError(
             "SCHEMA_VALIDATION_FAILED",
@@ -437,3 +434,17 @@ def _validate_instance(schema: dict[str, Any], instance: Any, label: str) -> Non
                 "validation_error": str(error),
             },
         ) from error
+
+
+def _canonical_json_schema(schema: dict[str, Any]) -> str | None:
+    """Return a cache key only when JSON round-tripping preserves the host schema.
+
+    Host-owned JSON Schema declarations may use Python objects accepted by jsonschema,
+    such as ``Decimal`` constants. Coercing those objects into strings changes ``const``
+    and ``enum`` constraints, so non-JSON schemas deliberately bypass the cache.
+    """
+
+    try:
+        return json.dumps(schema, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        return None

@@ -145,7 +145,6 @@ JevAnswer = Annotated[
     JevNoulAnswer | JevChoiceAnswer | JevScoreAnswer,
     Field(discriminator="type"),
 ]
-# Built once: see base_agent.py's identical rationale for caching this adapter.
 _JEV_ANSWER_ADAPTER: TypeAdapter[JevAnswer] = TypeAdapter(JevAnswer)
 
 
