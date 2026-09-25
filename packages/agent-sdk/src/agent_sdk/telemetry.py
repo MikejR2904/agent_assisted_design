@@ -137,7 +137,35 @@ class TelemetryStore:
         self._root.mkdir(parents=True, exist_ok=True)
         self._database_path = self._root / "telemetry.sqlite3"
         self._lock = threading.RLock()
+        # One connection for the store's lifetime: opening a fresh sqlite3
+        # connection (plus its two setup PRAGMAs) on every single call was
+        # measured as the dominant cost of a realistic run -- 138s of 279s in a
+        # 15-run profile came from sqlite3.Connection.execute alone, almost
+        # entirely reconnection overhead, not query cost. check_same_thread=False
+        # is safe here because every access below is already serialized through
+        # self._lock, not because concurrent use is otherwise fine.
+        self._connection = sqlite3.connect(
+            self._database_path, timeout=10, isolation_level=None, check_same_thread=False
+        )
+        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA foreign_keys=ON")
         self._initialize()
+
+    def close(self) -> None:
+        """Close the persistent connection. Safe to call multiple times.
+
+        Not required for correctness during normal operation, but Windows
+        refuses to delete or rename a file, or its containing directory, while
+        a handle to it is open -- unlike POSIX. Confirmed in practice: a
+        multi-run benchmark's `shutil.rmtree(..., ignore_errors=True)` silently
+        left several runs' telemetry.sqlite3 behind because their store's
+        connection was still open at cleanup time. Callers that need to remove
+        a run root deterministically (test teardown, a benchmark script)
+        should call this first.
+        """
+
+        with self._lock:
+            self._connection.close()
 
     @property
     def root(self) -> Path:
@@ -176,7 +204,7 @@ class TelemetryStore:
     def append(self, event: TelemetryEvent) -> TelemetryEvent:
         """Append one event atomically after assigning its sequence and hash-chain predecessor."""
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection as connection:
             connection.execute("BEGIN IMMEDIATE")
             previous = connection.execute(
                 "SELECT sequence, integrity_hash FROM events "
@@ -226,7 +254,7 @@ class TelemetryStore:
             and not observation.unavailable_reason
         ):
             raise ValueError("Unavailable metric observations require an unavailable_reason.")
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection as connection:
             connection.execute(
                 """
                 INSERT INTO metric_observations (
@@ -255,7 +283,7 @@ class TelemetryStore:
         return observation
 
     def register_metric_definition(self, definition: MetricDefinition) -> MetricDefinition:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection as connection:
             connection.execute(
                 """
                 INSERT INTO metric_definitions (metric_id, definition_json)
@@ -268,7 +296,7 @@ class TelemetryStore:
         return definition
 
     def list_metric_definitions(self) -> list[MetricDefinition]:
-        with self._connect() as connection:
+        with self._lock, self._connection as connection:
             rows = connection.execute(
                 "SELECT definition_json FROM metric_definitions ORDER BY metric_id ASC"
             ).fetchall()
@@ -286,7 +314,7 @@ class TelemetryStore:
             raise ValueError("Telemetry event page size must be between 1 and 1000.")
         if through_sequence is not None and through_sequence < after_sequence:
             return []
-        with self._connect() as connection:
+        with self._lock, self._connection as connection:
             rows = connection.execute(
                 """
                 SELECT event_json FROM events
@@ -300,7 +328,7 @@ class TelemetryStore:
     def run_snapshot_sequence(self, run_id: str) -> int:
         """Return the highest persisted sequence for an explicit verification boundary."""
 
-        with self._connect() as connection:
+        with self._lock, self._connection as connection:
             row = connection.execute(
                 "SELECT COALESCE(MAX(sequence), 0) FROM events WHERE run_id = ?", (run_id,)
             ).fetchone()
@@ -329,7 +357,7 @@ class TelemetryStore:
             after_sequence = page[-1].sequence
 
     def list_metrics(self, run_id: str) -> list[MetricObservation]:
-        with self._connect() as connection:
+        with self._lock, self._connection as connection:
             rows = connection.execute(
                 "SELECT observation_json FROM metric_observations "
                 "WHERE run_id = ? ORDER BY observed_at_utc ASC",
@@ -340,7 +368,7 @@ class TelemetryStore:
     def list_runs(self, *, limit: int = 100) -> list[TelemetryRunSummary]:
         if limit < 1 or limit > 1_000:
             raise ValueError("Telemetry run page size must be between 1 and 1000.")
-        with self._connect() as connection:
+        with self._lock, self._connection as connection:
             rows = connection.execute(
                 """
                 SELECT run_id, COUNT(*), MIN(occurred_at_utc), MAX(occurred_at_utc)
@@ -416,7 +444,7 @@ class TelemetryStore:
         return {**report, "report_path": str(target.relative_to(self._root))}
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._lock, self._connection as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -458,12 +486,6 @@ class TelemetryStore:
                 );
                 """
             )
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database_path, timeout=10, isolation_level=None)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
 
 
 def utc_now() -> str:

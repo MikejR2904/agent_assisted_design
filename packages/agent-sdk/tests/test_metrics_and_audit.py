@@ -93,7 +93,7 @@ def test_telemetry_verifies_complete_chain_and_detects_suffix_tampering(tmp_path
     assert report["verified_event_count"] == 1_001
     assert store.verify_run_chain(context.run_id)
 
-    with store._connect() as connection:  # noqa: SLF001 - verifies persisted integrity boundary.
+    with store._connection as connection:  # noqa: SLF001 - verifies persisted integrity boundary.
         serialized = str(
             connection.execute(
                 "SELECT event_json FROM events WHERE run_id = ? AND sequence = ?",

@@ -7,10 +7,11 @@ import json
 import os
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from pydantic import Field, field_validator
 
@@ -43,13 +44,40 @@ class AuditTranscriptStore:
     intentionally external to ProjectState and never feeds raw history into ModelContext.
     """
 
-    def __init__(self, root: Path, *, max_payload_chars: int = 8_192) -> None:
+    def __init__(
+        self, root: Path, *, max_payload_chars: int = 8_192, max_open_handles: int = 32
+    ) -> None:
         if max_payload_chars < 256:
             raise ValueError("max_payload_chars must be at least 256.")
+        if max_open_handles < 1:
+            raise ValueError("max_open_handles must be at least 1.")
         self._root = root.resolve() / ".agent-audit-logs"
         self._root.mkdir(parents=True, exist_ok=True)
         self._max_payload_chars = max_payload_chars
+        self._max_open_handles = max_open_handles
         self._lock = threading.RLock()
+        # LRU pool of open append handles, keyed by run_id: append() is called
+        # once per audit event and was measured opening its file every single
+        # time (each open ~4ms on this machine, antivirus/indexer interference
+        # being the usual cause) -- the same reconnection-overhead pattern
+        # fixed for TelemetryStore's SQLite connection, generalized with
+        # eviction since this store has one growing file per run_id rather
+        # than a single database for its whole lifetime. Bounded so a
+        # long-running host cycling through many runs doesn't accumulate
+        # unbounded open file handles.
+        self._handles: OrderedDict[str, IO[bytes]] = OrderedDict()
+
+    def _handle_for(self, run_id: str) -> IO[bytes]:
+        cached = self._handles.get(run_id)
+        if cached is not None:
+            self._handles.move_to_end(run_id)
+            return cached
+        if len(self._handles) >= self._max_open_handles:
+            _evicted_run_id, evicted_handle = self._handles.popitem(last=False)
+            evicted_handle.close()
+        handle = self._jsonl_path(run_id).open("a+b")
+        self._handles[run_id] = handle
+        return handle
 
     def append(
         self,
@@ -61,8 +89,13 @@ class AuditTranscriptStore:
         iteration: int | None = None,
     ) -> AuditLogEntry:
         with self._lock:
-            path = self._jsonl_path(run_id)
-            previous, sequence = self._tail(path)
+            # "a+b" lets one handle both read the tail (via explicit seek) and
+            # append the new entry -- append-mode writes always land at the
+            # true end regardless of prior seeks.
+            handle = self._handle_for(run_id)
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            previous, sequence = _parse_tail(handle, end)
             prepared = AuditLogEntry(
                 sequence=sequence + 1,
                 event_type=event_type,
@@ -76,11 +109,10 @@ class AuditTranscriptStore:
             complete = prepared.model_copy(
                 update={"integrity_hash": _hash(prepared.model_dump(mode="json"))}
             )
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(complete.model_dump_json())
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+            handle.write(complete.model_dump_json().encode("utf-8"))
+            handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
             return complete
 
     def list_entries(
@@ -188,14 +220,26 @@ class AuditTranscriptStore:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
             end = handle.tell()
-            seek = max(0, end - 65_536)
-            handle.seek(seek)
-            lines = handle.read().decode("utf-8").splitlines()
-        tail = AuditLogEntry.model_validate_json(lines[-1])
-        return tail.integrity_hash, tail.sequence
+            return _parse_tail(handle, end)
 
     def _jsonl_path(self, run_id: str) -> Path:
         return self._root / f"{_safe_name(run_id)}.jsonl"
+
+    def close(self) -> None:
+        """Release every cached append handle. Safe to call multiple times.
+
+        Not required for correctness during normal operation (handles are
+        released on eviction or process exit either way), but Windows refuses
+        to delete or rename a file, or its containing directory, while a
+        handle to it is still open -- unlike POSIX. Callers that need to
+        remove a run root deterministically (test teardown, a benchmark
+        script) should call this first.
+        """
+
+        with self._lock:
+            for handle in self._handles.values():
+                handle.close()
+            self._handles.clear()
 
 
 def _bound_and_redact(value: Any, max_chars: int) -> dict[str, Any]:
@@ -238,6 +282,20 @@ def _reject_hidden_reasoning(value: Any) -> None:
     elif isinstance(value, list):
         for item in value:
             _reject_hidden_reasoning(item)
+
+
+def _parse_tail(handle: Any, end: int) -> tuple[str | None, int]:
+    """Read the last line from an already-open handle positioned at ``end``."""
+
+    if end == 0:
+        return None, 0
+    seek = max(0, end - 65_536)
+    handle.seek(seek)
+    lines = handle.read().decode("utf-8").splitlines()
+    if not lines:
+        return None, 0
+    tail = AuditLogEntry.model_validate_json(lines[-1])
+    return tail.integrity_hash, tail.sequence
 
 
 def _canonical_json(value: Any) -> str:
