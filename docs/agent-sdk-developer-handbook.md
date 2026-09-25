@@ -1,6 +1,6 @@
 # Agent SDK Developer Handbook
 
-**Status:** Package `agent-design-agent-sdk` 0.15.0.
+**Status:** Package `agent-design-agent-sdk` 0.17.0.
 **Audience:** Engineers embedding the SDK in a Python application, extending its governed tools, implementing provider adapters, or maintaining the Python/MCP runtime.
 
 ## 1. What the SDK is responsible for
@@ -105,6 +105,34 @@ class HostProviderAdapter:
 ```
 
 The adapter must return the SDK’s typed turn structure, not free-form text. If the provider cannot accurately report a usage field, omit it. The SDK records that metric as unavailable rather than estimating it. Never place hidden chain-of-thought, credentials, or raw provider session secrets in `ProviderUsage`, a tool result, or an audit payload.[3]
+
+### Use the optional OpenAI-compatible adapters
+
+`OpenAICompatibleAgentModel`, `OpenAICompatibleEmbeddingProvider`,
+`OpenAICompatibleVisionAdapter`, and `OpenAICompatibleSemanticGapAnalyzer` provide
+concrete protocol adapters without choosing a deployment. The host constructs
+`OpenAICompatibleEndpoint` with its selected HTTP(S) base URL, API key, timeout, and
+exact model IDs. The SDK performs no environment-variable credential lookup, no model
+discovery, and no MCP registration of executable provider clients. The chat adapter
+requires an exact match between its provider/model constructor values and the
+`AgentDefinition.model_binding`; a mismatch fails before a network request.[21]
+
+When a Chat Completions provider requests a function call, BaseAgent still performs
+the normal tool-schema, policy, approval, watchdog, evidence, and state-reduction
+steps. The optional `ProviderToolResultConsumer` protocol then passes only that batch’s
+canonical preview-bounded result to the provider continuation. It is not appended to
+normal `ModelContext.observations` or replayed as transcript history. The adapter checks
+that returned call IDs exactly match the provider-issued calls. This narrow exception is
+required by provider function-call protocols and preserves state-first working memory.[21]
+
+`OpenAICompatibleEmbeddingProvider` implements the synchronous `EmbeddingProvider`
+contract used by `QdrantRetrievalIndex`; the host must supply the known vector
+dimension. `OpenAICompatibleVisionAdapter` requires a host image loader. For standalone
+frozen PNG/JPEG source documents, `SourceVerifiedImageLoader` enforces path containment,
+byte bounds, and source-hash equality; embedded PDF/DOCX image extraction remains a
+host-provided format-aware operation. Read the
+[provider adapters and semantic Gate 1 guide](provider-adapters-and-semantic-gate.md)
+before deployment.[21] [22]
 
 ## 5. Declare tools before a model may request them
 
@@ -304,6 +332,23 @@ additive requirement IDs are MINOR; acceptance-check/source-reference-only chang
 PATCH. Automatic classification refuses a pre-existing tag with no stored snapshot until
 an approved baseline lock exists.[15]
 
+### Admit model-proposed semantic gaps without granting semantic authority
+
+The Gate 1 design classifies ambiguity, semantic inconsistency, and unstated assumption
+as model-needed analysis, unlike deterministic absence, traceability, circularity, and
+verifiability checks.[16] A host may obtain `SemanticGapFinding` values through
+`OpenAICompatibleSemanticGapAnalyzer` or another local implementation and pass them to
+`SpecificationGate.validate(..., semantic_findings=...)`. The analyzer sees a frozen
+requirement view and returns a typed proposal bound to a provider/model/request digest.
+
+Gate 1 admits the finding only when all cited requirement IDs exist and every cited
+`SourceRef` exactly belongs to those frozen requirements. An inconsistency must cite at
+least two requirements; semantic findings cannot be critical. The report persists an
+accept/reject decision for every submitted finding, and the accepted gap records only
+the provider/receipt digest—not raw model reasoning. This does not replace designer
+soft-lock approval. The data-only MCP/TypeScript façade can forward validated semantic
+finding data, but never provider credentials or a general model-execution request.[21]
+
 ## 15. Preserve P0 trust guarantees
 
 The 0.16.0 P0 increment repairs guarantees already made by the local harness; it does
@@ -339,7 +384,7 @@ details, and both-side content authorization.
 
 ## 16. Current integration limits
 
-The SDK has no selected real model provider, remote execution backend, SSH/Desktop/Sandbox connector, EDA binary, container/cgroup isolation, multi-process lock, external authenticated identity, or live RTL-to-GDSII benchmark corpus. It must not be presented as already providing those capabilities. The implemented PCKP benchmark is a frozen engineering fixture used to verify deterministic selection and compare it with the greedy baseline; it is not an ASIC-flow performance result.[5] [8]
+The SDK has optional OpenAI-compatible protocol adapters but no default selected provider, credential integration, live provider validation, remote execution backend, SSH/Desktop/Sandbox connector, EDA binary, container/cgroup isolation, multi-process lock, external authenticated identity, or live RTL-to-GDSII benchmark corpus. It must not be presented as already providing those capabilities. The implemented PCKP benchmark is a frozen engineering fixture used to verify deterministic selection and compare it with the greedy baseline; it is not an ASIC-flow performance result.[5] [8]
 
 ## References
 
@@ -373,11 +418,19 @@ The SDK has no selected real model provider, remote execution backend, SSH/Deskt
 
 [15]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/retrieval.py "Provenance-grounded retrieval contracts, cache boundary, Qdrant adapter, and telemetry sink"
 
-[16]: /home/ubuntu/upload/Agent-AssistedDesignFrameworkSystemsDesign-updated.pdf "Agent-Assisted Design Framework Systems Design, updated, pp. 22–23 and 38–39, source pointers, task-aware loading, traceability traversal, and blast radius"
+[16]: /home/ubuntu/upload/Agent-AssistedDesignFrameworkSystemsDesign-updated.pdf "Agent-Assisted Design Framework Systems Design, updated, pp. 22–23; p. 38, lines 3–29; p. 39, lines 31–49"
 
 [17]: https://qdrant.tech/documentation/concepts/filtering/ "Qdrant filtering and payload-index documentation"
 
 [18]: /home/ubuntu/work/agent_assisted_design/packages/agent-sdk/src/agent_sdk/dependency_graph.py "Deterministic reverse reachability and cycle traversal"
+
+[19]: p0-trust-guarantee-repair.md "P0 provenance, evidence-integrity, and bounded-failure repair record"
+
+[20]: https://cwe.mitre.org/data/definitions/1333.html "CWE-1333: Inefficient Regular Expression Complexity"
+
+[21]: provider-adapters-and-semantic-gate.md "Host-injected OpenAI-compatible protocol adapters, bounded provider continuation, and source-bound semantic Gap 1 admission"
+
+[22]: https://platform.openai.com/docs/guides/images-vision "Image input modes, base64 data URLs, and token accounting"
 
 [19]: p0-trust-guarantee-repair.md "P0 Trust-Guarantee Repair Record: implemented contracts, invariants, evidence, and limitations"
 

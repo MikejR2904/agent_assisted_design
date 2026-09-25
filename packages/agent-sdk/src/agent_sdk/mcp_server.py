@@ -50,6 +50,7 @@ from .specification_gate import (
     DependencyGraph,
     GapReport,
     Gate1ArtifactStore,
+    SemanticGapFinding,
     SpecificationGate,
     UnifiedSpecification,
     VersionMetadata,
@@ -70,7 +71,7 @@ from .telemetry import (
 from .tools import InMemoryTaskToolExecutor
 
 SERVER_NAME = "agent-design-python-runtime"
-SERVER_VERSION = "0.16.1"
+SERVER_VERSION = "0.17.0"
 
 
 def _validation_errors(error: ValidationError) -> list[dict[str, Any]]:
@@ -728,13 +729,17 @@ def create_mcp_server(run_root: Path | None = None) -> MCPServer:
     async def validate_gate_one(
         specification: dict[str, Any],
         required_categories: list[str],
+        semantic_findings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Run deterministic Gate 1 absence, traceability, and verifiability checks."""
+        """Run Gate 1 checks and source-bound admission of host-proposed semantic gaps."""
 
         try:
             graph, report = specification_gate.validate(
                 UnifiedSpecification.model_validate(specification),
                 required_categories={SpecificationCategory(item) for item in required_categories},
+                semantic_findings=[
+                    SemanticGapFinding.model_validate(item) for item in semantic_findings or []
+                ],
             )
             return {
                 "ok": True,

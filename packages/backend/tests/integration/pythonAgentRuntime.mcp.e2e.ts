@@ -154,6 +154,26 @@ const orchestrationRequest = {
   profile_id_by_task_id: { 'inspect-rtl': 'rtl-reviewer' },
 };
 
+const semanticSourceRef = {
+  document_id: 'REQ-READY',
+  relative_path: 'functional/requirements.md',
+  source_hash: 'source-hash',
+  format: 'md',
+  location: 'line:1',
+};
+
+const gateOneSpecification = {
+  version: '1.0.0',
+  documents: [],
+  requirements: [{
+    id: 'REQ-READY',
+    category: 'functional',
+    text: 'The interface shall assert ready.',
+    source_refs: [semanticSourceRef],
+    acceptance_checks: ['test-ready'],
+  }],
+};
+
 async function main(): Promise<void> {
   const client = new PythonAgentRuntimeClient({ mcpUrl: endpoint, requestTimeoutMs: 10_000 });
   const toolNames = await client.listTools();
@@ -234,6 +254,23 @@ async function main(): Promise<void> {
   const planValidation = await client.validatePlan(plan);
   assert.equal(planValidation.ok, true);
   assert.equal((planValidation.report as { valid: boolean }).valid, true);
+
+  const semanticGate = await client.validateGateOne(
+    gateOneSpecification,
+    [],
+    [{
+      finding_id: 'missing-ready-condition',
+      type: 'ambiguity',
+      requirement_ids: ['REQ-READY'],
+      source_refs: [semanticSourceRef],
+      description: 'The ready assertion condition is unspecified.',
+      suggested_fix: 'Declare the condition and cycle.',
+      analysis_provider: 'host-analysis',
+      analysis_receipt_digest: 'd'.repeat(64),
+    }],
+  );
+  assert.equal(semanticGate.ok, true);
+  assert.equal((semanticGate.summary as { semantic_findings_accepted: number }).semantic_findings_accepted, 1);
 
   const started = await client.startRun(plan);
   assert.equal(started.ok, true);

@@ -183,6 +183,53 @@ async def test_mcp_server_runs_a_structured_deterministic_agent_task(client: Cli
 
 
 @pytest.mark.anyio
+async def test_mcp_gate_one_admits_only_source_bound_semantic_findings(client: Client):
+    source = {
+        "document_id": "REQ-READY",
+        "relative_path": "functional/requirements.md",
+        "source_hash": "source-hash",
+        "format": "md",
+        "location": "line:1",
+    }
+    response = await client.call_tool(
+        "validate_gate_one",
+        {
+            "specification": {
+                "version": "1.0.0",
+                "documents": [],
+                "requirements": [
+                    {
+                        "id": "REQ-READY",
+                        "category": "functional",
+                        "text": "The interface shall assert ready.",
+                        "source_refs": [source],
+                        "acceptance_checks": ["test-ready"],
+                    }
+                ],
+            },
+            "required_categories": [],
+            "semantic_findings": [
+                {
+                    "finding_id": "missing-ready-condition",
+                    "type": "ambiguity",
+                    "requirement_ids": ["REQ-READY"],
+                    "source_refs": [source],
+                    "description": "The ready assertion condition is unspecified.",
+                    "suggested_fix": "Declare the condition and cycle.",
+                    "analysis_provider": "host-analysis",
+                    "analysis_receipt_digest": "c" * 64,
+                }
+            ],
+        },
+    )
+
+    payload = response.structured_content
+    assert payload["ok"] is True
+    assert payload["summary"]["semantic_findings_accepted"] == 1
+    assert payload["gap_report"]["gaps"][-1]["type"] == "ambiguity"
+
+
+@pytest.mark.anyio
 async def test_mcp_server_records_a_human_decision_and_open_question_in_project_state(
     client: Client,
 ):

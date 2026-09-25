@@ -351,6 +351,7 @@ class AgentLifecycleEvent(StrictModel):
         "tool-batch-completed",
         "tool-requested",
         "tool-completed",
+        "provider-tool-results-forwarded",
         "output-rejected",
         "verification-completed",
         "terminated",

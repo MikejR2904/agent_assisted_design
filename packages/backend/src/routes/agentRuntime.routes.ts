@@ -94,7 +94,11 @@ const SelectContextRequestSchema = z.object({
   taskText: z.string().min(1),
   scopePointers: StringArraySchema.default([]),
 });
-const GateOneRequestSchema = z.object({ specification: JsonObjectSchema, requiredCategories: StringArraySchema });
+const GateOneRequestSchema = z.object({
+  specification: JsonObjectSchema,
+  requiredCategories: StringArraySchema,
+  semanticFindings: z.array(JsonObjectSchema).max(64).default([]),
+});
 const SoftLockRequestSchema = z.object({
   specification: JsonObjectSchema,
   dependencyGraph: JsonObjectSchema,
@@ -377,7 +381,13 @@ export function agentRuntimeRouter(client?: PythonAgentRuntimeClient): Router {
   router.post('/specifications/gate-one/validate', async (req, res, next) => {
     const parsed = GateOneRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
-    try { res.json(await runtime.validateGateOne(parsed.data.specification, parsed.data.requiredCategories)); } catch (error) { next(error); }
+    try {
+      res.json(await runtime.validateGateOne(
+        parsed.data.specification,
+        parsed.data.requiredCategories,
+        parsed.data.semanticFindings,
+      ));
+    } catch (error) { next(error); }
   });
 
   router.post('/specifications/gate-one/soft-lock', async (req, res, next) => {

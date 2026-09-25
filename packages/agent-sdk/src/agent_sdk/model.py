@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
 
@@ -13,6 +13,7 @@ from .contracts import (
     AgentTurn,
     ContextProjectionMetadata,
     EpisodeSummary,
+    ModelBinding,
     ModelObservation,
     ScopedAgentTask,
 )
@@ -77,6 +78,37 @@ class ModelContext:
     episodes: Sequence[EpisodeSummary]
     continuation: ProviderContinuation | None = None
     projection: ContextProjectionMetadata | None = None
+    # The model adapter validates this immutable data binding before sending a
+    # request, so a host cannot silently use a client for a different model.
+    model_binding: ModelBinding | None = None
+    output_schema: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ProviderToolResult:
+    """A bounded one-time result projection required by a provider continuation protocol.
+
+    This is not ordinary state-first model context. The BaseAgent passes it only to
+    adapters that explicitly implement ``ProviderToolResultConsumer`` so an external
+    provider can resolve a function/tool call within its own continuation protocol.
+    """
+
+    call_id: str
+    name: str
+    status: str
+    content: str
+    truncated: bool
+
+
+@runtime_checkable
+class ProviderToolResultConsumer(Protocol):
+    """Optional adapter capability for provider-native tool-call continuations."""
+
+    async def accept_tool_results(
+        self,
+        continuation: ProviderContinuation,
+        results: Sequence[ProviderToolResult],
+    ) -> ProviderContinuation: ...
 
 
 class AgentModel(Protocol):
